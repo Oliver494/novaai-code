@@ -14,6 +14,7 @@ const STORAGE_KEY = "novaai-code:updates";
 const TWELVE_HOURS = 12 * 60 * 60 * 1_000;
 const UpdateContext = createContext<UpdateContextValue | null>(null);
 let pendingCheck: Promise<UpdateCheckResult> | null = null;
+let automaticStartupCheckStarted = false;
 
 function loadStored(): StoredUpdates {
   try {
@@ -60,7 +61,28 @@ export function UpdateProvider({ children }: { children: ReactNode }) {
   }, [installedVersion, stored.channel]);
 
   useEffect(() => {
-    if (stored.automatic && Date.now() - (stored.lastResult?.checkedAt ?? 0) >= TWELVE_HOURS) void runCheck();
+    if (!stored.automatic) return;
+
+    // Always perform one fresh check per application launch. A cached result may
+    // come from a temporary offline/private-repository failure and must not keep
+    // automatic notifications silent for the whole polling interval.
+    if (!automaticStartupCheckStarted) {
+      automaticStartupCheckStarted = true;
+      void runCheck();
+      return;
+    }
+
+    // Once the launch check finishes, continue polling every twelve hours while
+    // the application remains open.
+    if (!stored.lastResult?.checkedAt) return;
+    const elapsed = Date.now() - (stored.lastResult?.checkedAt ?? 0);
+    const delay = Math.max(0, TWELVE_HOURS - elapsed);
+    if (delay === 0) {
+      void runCheck();
+      return;
+    }
+    const timer = window.setTimeout(() => void runCheck(), delay);
+    return () => window.clearTimeout(timer);
   }, [runCheck, stored.automatic, stored.lastResult?.checkedAt]);
 
   const release = stored.lastResult?.release ?? null;
