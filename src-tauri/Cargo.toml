@@ -1,6 +1,6 @@
 [package]
 name = "novaai-code"
-version = "0.1.1"
+version = "0.1.2"
 description = "A local-first AI coding assistant"
 authors = ["NovaAI Code contributors"]
 edition = "2021"
@@ -34,6 +34,7 @@ sha2 = "0.10"
 hex = "0.4"
 base64 = "0.22"
 keyring = { version = "4", features = ["v1"] }
+semver = "1"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "time", "net", "io-util"] }

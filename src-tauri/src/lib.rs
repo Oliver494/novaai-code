@@ -10,6 +10,7 @@ use tempfile::NamedTempFile;
 
 mod ai;
 mod agent;
+mod updates;
 
 const MAX_FILE_BYTES: u64 = 2 * 1024 * 1024;
 const MAX_TREE_DEPTH: usize = 32;
@@ -814,6 +815,7 @@ pub fn run() {
             ,agent::detect_project_commands
             ,agent::run_agent_command
             ,agent::cancel_agent_command
+            ,updates::check_for_updates
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

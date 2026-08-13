@@ -17,6 +17,7 @@ import { ChatPane } from "./components/ChatPane";
 import { FileTree } from "./components/FileTree";
 import { ProviderPanel } from "./components/ProviderPanel";
 import { PreferencesPanel } from "./components/PreferencesPanel";
+import { UpdateBanner } from "./components/UpdateBanner";
 import { ai } from "./services/ai";
 import { chooseProjectFolder, errorMessage, projectFiles } from "./services/fileSystem";
 import { usePreferences } from "./services/preferences";
@@ -317,6 +318,7 @@ function App() {
       </main>
 
       <div className="notice-stack" aria-live="polite">{notices.map((notice) => <div key={notice.id} className={`notice notice--${notice.tone}`}>{notice.message}<button onClick={() => setNotices((current) => current.filter((item) => item.id !== notice.id))} aria-label="Cerrar aviso"><X size={14} /></button></div>)}</div>
+      <UpdateBanner />
       {dialog && <ActionDialog request={dialog} busy={dialogBusy} error={dialogError} onCancel={() => !dialogBusy && setDialog(null)} onConfirm={(value) => void confirmDialog(value)} />}
       {providerOpen && aiSettings && <ProviderPanel projectPath={project?.path ?? null} settings={aiSettings} onChange={setAiSettings} onClose={() => setProviderOpen(false)} />}
       {preferencesOpen && <PreferencesPanel onClose={() => setPreferencesOpen(false)} onOpenProviders={() => { setPreferencesOpen(false); setProviderOpen(true); }} />}

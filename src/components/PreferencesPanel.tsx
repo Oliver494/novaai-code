@@ -1,6 +1,7 @@
 import { Check, Languages, Monitor, Moon, Search, Sun, X } from "lucide-react";
 import { useMemo, useState } from "react";
 import { usePreferences, type AppLanguage, type LanguagePreference, type ThemePreference } from "../services/preferences";
+import { UpdateSettings } from "./UpdateSettings";
 
 type Props = { onClose: () => void; onOpenProviders: () => void };
 
@@ -28,6 +29,7 @@ export function PreferencesPanel({ onClose, onOpenProviders }: Props) {
       <div className="preferences-content">
         <section className="preference-section"><div className="preference-heading"><Sun size={15} /><div><strong>{t("Apariencia", "Appearance")}</strong><span>{t("Elige cómo se muestra NovaAI Code", "Choose how NovaAI Code looks")}</span></div></div><div className="theme-options">{themes.map((item) => { const Icon = item.icon; return <button type="button" key={item.id} className={theme === item.id ? "is-active" : ""} onClick={() => setTheme(item.id)}><Icon size={17} /><span><strong>{item.label}</strong><small>{item.description}</small></span>{theme === item.id && <Check size={14} />}</button>; })}</div></section>
         <section className="preference-section"><div className="preference-heading"><Languages size={15} /><div><strong>{t("Idioma", "Language")}</strong><span>{t("Automático usa el idioma de Windows", "Automatic uses the Windows language")}</span></div></div><div className="language-search"><Search size={14} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder={t("Buscar idioma…", "Search languages…")} autoFocus={false} /></div><div className="language-list">{filtered.map((item) => <button type="button" key={item.id} className={language === item.id ? "is-active" : ""} onClick={() => setLanguage(item.id)}><span className="language-symbol">{item.id === "auto" ? <Monitor size={15} /> : item.id.toUpperCase()}</span><span><strong>{item.name}</strong><small>{item.nativeName}{item.id === "auto" ? ` · ${item.detail}` : ""}</small></span>{language === item.id && <Check size={14} />}</button>)}{!filtered.length && <p>{t("No encontramos ese idioma.", "No languages found.")}</p>}</div></section>
+        <UpdateSettings />
       </div>
       <footer><button type="button" className="secondary-button" onClick={onOpenProviders}>{t("Configurar proveedores", "Configure providers")}</button><button type="button" className="primary-button" onClick={onClose}>{t("Listo", "Done")}</button></footer>
     </section>

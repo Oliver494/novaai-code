@@ -1,0 +1,13 @@
+import { ArrowUpRight, CheckCircle2, LoaderCircle, RefreshCw, Rocket, WifiOff } from "lucide-react";
+import { usePreferences } from "../services/preferences";
+import { useUpdates, type UpdateStatus } from "../services/updates";
+
+const statusIcons: Partial<Record<UpdateStatus, typeof CheckCircle2>> = { checking: LoaderCircle, up_to_date: CheckCircle2, update_available: Rocket, offline: WifiOff };
+
+export function UpdateSettings() {
+  const { t } = usePreferences();
+  const updates = useUpdates();
+  const Icon = statusIcons[updates.status] ?? RefreshCw;
+  const checkedAt = updates.lastResult?.checkedAt;
+  return <section className="preference-section"><div className="preference-heading"><Rocket size={15} /><div><strong>{t("Actualizaciones", "Updates")}</strong><span>{t("Avisos seguros desde GitHub Releases", "Secure notices from GitHub Releases")}</span></div></div><div className="update-settings"><div className="update-settings__summary"><div><span>{t("Versión instalada", "Installed version")}</span><strong>v{updates.installedVersion}</strong></div><label><input type="checkbox" checked={updates.automatic} onChange={(event) => updates.setAutomatic(event.target.checked)} />{t("Comprobar automáticamente", "Check automatically")}</label></div><div className="update-settings__channel"><span>{t("Canal", "Channel")}</span><div><button className={updates.channel === "stable" ? "is-active" : ""} onClick={() => updates.setChannel("stable")}>{t("Estable", "Stable")}</button><button className={updates.channel === "experimental" ? "is-active" : ""} onClick={() => updates.setChannel("experimental")}>{t("Experimental", "Experimental")}</button></div></div><div className={`update-settings__status update-settings__status--${updates.status}`}><Icon className={updates.status === "checking" ? "spin" : ""} size={15} /><div><strong>{updates.status === "idle" ? t("Aún no comprobado", "Not checked yet") : updates.status === "checking" ? t("Comprobando GitHub…", "Checking GitHub…") : updates.lastResult?.message}</strong><small>{checkedAt ? `${t("Última comprobación", "Last checked")}: ${new Date(checkedAt).toLocaleString()}` : t("La comprobación no bloquea el inicio.", "Checking does not block startup.")}</small></div></div><div className="update-settings__actions"><button className="secondary-button" disabled={updates.status === "checking"} onClick={() => void updates.check()}><RefreshCw className={updates.status === "checking" ? "spin" : ""} size={14} />{t("Buscar actualizaciones", "Check for updates")}</button>{updates.lastResult?.release && <button className="text-action" onClick={() => void updates.openRelease()}>{t("Abrir release", "Open release")}<ArrowUpRight size={13} /></button>}</div></div></section>;
+}
