@@ -5,6 +5,12 @@
 </p>
 
 <p align="center">
+  <a href="https://github.com/Oliver494/novaai-code/releases/latest"><img src="https://img.shields.io/github/v/release/Oliver494/novaai-code?display_name=tag&sort=semver" alt="Latest release"></a>
+  <a href="https://github.com/Oliver494/novaai-code/actions/workflows/ci.yml"><img src="https://github.com/Oliver494/novaai-code/actions/workflows/ci.yml/badge.svg" alt="CI status"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-blue.svg" alt="Apache-2.0 license"></a>
+</p>
+
+<p align="center">
   <a href="https://github.com/Oliver494/novaai-code/releases/latest">Download for Windows</a> ·
   <a href="README.es.md">Español</a> ·
   <a href="ROADMAP.md">Roadmap</a> ·
