@@ -17,6 +17,9 @@ export function supportsReasoningEffort(provider: ProviderId, modelId: string): 
     case "nvidia":
       return model.includes("gpt-oss") || model.includes("sarvam-m");
     case "zai":
+      return false;
+    case "kimi":
+      return model.includes("kimi-k3");
     case "custom":
       return false;
   }

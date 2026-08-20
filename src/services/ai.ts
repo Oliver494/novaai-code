@@ -1,5 +1,5 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
-import type { AiChatEvent, AiSettings, ChatUpload, Diagnostic, ProviderConfig, ProviderId, ProviderTestResult, ModelInfo, LocalModelCatalogItem, LocalModelDownloadEvent } from "../types";
+import type { AiChatEvent, AiSettings, ChatUpload, Diagnostic, ExternalFolderGrant, ProviderConfig, ProviderId, ProviderTestResult, ModelInfo, LocalModelCatalogItem, LocalModelDownloadEvent } from "../types";
 
 export const providerMeta: Record<ProviderId, { name: string; type: "local" | "cloud"; defaultEndpoint: string; requiresKey: boolean }> = {
   ollama: { name: "Ollama", type: "local", defaultEndpoint: "http://127.0.0.1:11434", requiresKey: false },
@@ -9,6 +9,7 @@ export const providerMeta: Record<ProviderId, { name: string; type: "local" | "c
   gemini: { name: "Google Gemini", type: "cloud", defaultEndpoint: "https://generativelanguage.googleapis.com/v1beta", requiresKey: true },
   nvidia: { name: "NVIDIA API", type: "cloud", defaultEndpoint: "https://integrate.api.nvidia.com/v1", requiresKey: true },
   zai: { name: "Z.AI", type: "cloud", defaultEndpoint: "https://api.z.ai/api/paas/v4", requiresKey: true },
+  kimi: { name: "Kimi", type: "cloud", defaultEndpoint: "https://api.moonshot.ai/v1", requiresKey: true },
   custom: { name: "Personalizado", type: "cloud", defaultEndpoint: "http://127.0.0.1:8000/v1", requiresKey: false },
 };
 
@@ -26,7 +27,7 @@ export const ai = {
   },
   test: (config: ProviderConfig, projectPath: string | null) => invoke<ProviderTestResult>("test_ai_provider", { config, projectPath }),
   cancel: (requestId: string) => invoke<boolean>("cancel_ai_chat", { requestId }),
-  chat: (request: { requestId: string; projectPath: string | null; config: ProviderConfig; messages: { role: "system" | "user" | "assistant"; content: string }[]; attachments: string[]; uploads: Pick<ChatUpload, "name" | "mimeType" | "kind" | "data">[]; workspaceAccess: boolean; canEdit: boolean }, onEvent: (event: AiChatEvent) => void) => {
+  chat: (request: { requestId: string; projectPath: string | null; config: ProviderConfig; messages: { role: "system" | "user" | "assistant"; content: string }[]; attachments: string[]; uploads: Pick<ChatUpload, "name" | "mimeType" | "kind" | "data">[]; externalFolders: ExternalFolderGrant[]; workspaceAccess: boolean; canEdit: boolean; codeMode: boolean }, onEvent: (event: AiChatEvent) => void) => {
     const channel = new Channel<AiChatEvent>();
     channel.onmessage = onEvent;
     return invoke<void>("chat_ai", { request, onEvent: channel });

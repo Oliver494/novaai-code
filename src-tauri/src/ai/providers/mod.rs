@@ -71,7 +71,9 @@ fn with_auth(
             .header("x-api-key", key.unwrap())
             .header("anthropic-version", "2023-06-01"),
         ProviderId::Gemini => builder.header("x-goog-api-key", key.unwrap()),
-        ProviderId::OpenAi | ProviderId::Zai => builder.bearer_auth(key.unwrap()),
+        ProviderId::OpenAi | ProviderId::Zai | ProviderId::Kimi => {
+            builder.bearer_auth(key.unwrap())
+        }
         ProviderId::Custom => match key {
             Some(value) => builder.bearer_auth(value),
             None => builder,
@@ -99,6 +101,7 @@ pub async fn list_models(
         ProviderId::Gemini => (endpoint(config, gemini::MODELS_PATH)?, false),
         ProviderId::Nvidia => (endpoint(config, nvidia::MODELS_PATH)?, false),
         ProviderId::Zai => unreachable!("Z.AI uses its documented integrated catalog"),
+        ProviderId::Kimi => (endpoint(config, openai::MODELS_PATH)?, false),
         ProviderId::Custom => (endpoint(config, openai::MODELS_PATH)?, false),
     };
     let request = with_auth(client.get(url), config.provider, key)?;
@@ -249,19 +252,35 @@ pub fn chat_request(
         ProviderId::Gemini => gemini::body(model, messages, images),
         ProviderId::Nvidia => nvidia::body(model, messages, images),
         ProviderId::Zai => zai::body(model, messages, images),
+        ProviderId::Kimi => lm_studio::body(model, messages, images),
         ProviderId::Custom => lm_studio::body(model, messages, images),
     };
     apply_reasoning_effort(config.provider, model, config.reasoning_effort, &mut body);
     let request = match config.provider {
-        ProviderId::Ollama => client.post(endpoint(config, ollama::CHAT_PATH)?).json(&body),
-        ProviderId::LmStudio => client.post(endpoint(config, lm_studio::CHAT_PATH)?).json(&body),
-        ProviderId::OpenAi => client.post(endpoint(config, openai::CHAT_PATH)?).json(&body),
-        ProviderId::Anthropic => client.post(endpoint(config, anthropic::CHAT_PATH)?).json(&body),
-        ProviderId::Gemini => client.post(endpoint(config, &gemini::chat_path(model))?).json(&body),
-        ProviderId::Nvidia => client.post(endpoint(config, nvidia::CHAT_PATH)?).json(&body),
+        ProviderId::Ollama => client
+            .post(endpoint(config, ollama::CHAT_PATH)?)
+            .json(&body),
+        ProviderId::LmStudio => client
+            .post(endpoint(config, lm_studio::CHAT_PATH)?)
+            .json(&body),
+        ProviderId::OpenAi => client
+            .post(endpoint(config, openai::CHAT_PATH)?)
+            .json(&body),
+        ProviderId::Anthropic => client
+            .post(endpoint(config, anthropic::CHAT_PATH)?)
+            .json(&body),
+        ProviderId::Gemini => client
+            .post(endpoint(config, &gemini::chat_path(model))?)
+            .json(&body),
+        ProviderId::Nvidia => client
+            .post(endpoint(config, nvidia::CHAT_PATH)?)
+            .json(&body),
         ProviderId::Zai => client
             .post(endpoint(config, zai::CHAT_PATH)?)
             .header("Accept-Language", "en-US,en")
+            .json(&body),
+        ProviderId::Kimi => client
+            .post(endpoint(config, lm_studio::CHAT_PATH)?)
             .json(&body),
         ProviderId::Custom => client
             .post(endpoint(config, lm_studio::CHAT_PATH)?)
@@ -280,7 +299,8 @@ fn apply_reasoning_effort(
     let value = effort.as_str();
     match provider {
         ProviderId::OpenAi
-            if (model.starts_with('o') && model.chars().nth(1).is_some_and(|c| c.is_ascii_digit()))
+            if (model.starts_with('o')
+                && model.chars().nth(1).is_some_and(|c| c.is_ascii_digit()))
                 || model.contains("gpt-5")
                 || model.contains("codex")
                 || model.contains("gpt-oss") =>
@@ -291,9 +311,19 @@ fn apply_reasoning_effort(
             }
         }
         ProviderId::Anthropic
-            if ["opus-4-5", "opus-4-6", "opus-4-7", "opus-4-8", "opus-5", "sonnet-4-6", "sonnet-5", "fable-5", "mythos"]
-                .iter()
-                .any(|name| model.contains(name)) =>
+            if [
+                "opus-4-5",
+                "opus-4-6",
+                "opus-4-7",
+                "opus-4-8",
+                "opus-5",
+                "sonnet-4-6",
+                "sonnet-5",
+                "fable-5",
+                "mythos",
+            ]
+            .iter()
+            .any(|name| model.contains(name)) =>
         {
             body["output_config"] = json!({ "effort": value });
         }
@@ -317,6 +347,16 @@ fn apply_reasoning_effort(
         }
         ProviderId::Nvidia if model.contains("gpt-oss") || model.contains("sarvam-m") => {
             body["reasoning_effort"] = Value::String(value.into());
+        }
+        ProviderId::Kimi if model.contains("kimi-k3") => {
+            // K3 supports low/high/max. Nova's middle level maps to high and
+            // its highest level maps to Kimi's maximum documented effort.
+            let kimi_effort = match effort {
+                ReasoningEffort::Low => "low",
+                ReasoningEffort::Medium => "high",
+                ReasoningEffort::High => "max",
+            };
+            body["reasoning_effort"] = Value::String(kimi_effort.into());
         }
         // Z.AI and many catalogue models only expose an on/off thinking switch.
         // Omitting a three-level field is safer than sending an unsupported value.
@@ -388,6 +428,7 @@ pub fn parse_stream(provider: ProviderId, data: &str) -> StreamChunk {
         ProviderId::Gemini => gemini::parse(&value),
         ProviderId::Nvidia => nvidia::parse(&value),
         ProviderId::Zai => zai::parse(&value),
+        ProviderId::Kimi => lm_studio::parse(&value),
         ProviderId::Custom => lm_studio::parse(&value),
     };
     let event = value
@@ -397,7 +438,11 @@ pub fn parse_stream(provider: ProviderId, data: &str) -> StreamChunk {
         .unwrap_or("");
     let reasoning = match provider {
         ProviderId::Ollama => value.pointer("/message/thinking").and_then(Value::as_str),
-        ProviderId::LmStudio | ProviderId::Nvidia | ProviderId::Zai | ProviderId::Custom => value
+        ProviderId::LmStudio
+        | ProviderId::Nvidia
+        | ProviderId::Zai
+        | ProviderId::Kimi
+        | ProviderId::Custom => value
             .pointer("/choices/0/delta/reasoning")
             .or_else(|| value.pointer("/choices/0/delta/reasoning_content"))
             .and_then(Value::as_str),
@@ -555,6 +600,7 @@ mod tests {
             (ProviderId::Gemini, "https://generativelanguage.googleapis.com/v1beta/models/test-model:streamGenerateContent?alt=sse"),
             (ProviderId::Nvidia, "https://integrate.api.nvidia.com/v1/chat/completions"),
             (ProviderId::Zai, "https://api.z.ai/api/paas/v4/chat/completions"),
+            (ProviderId::Kimi, "https://api.moonshot.ai/v1/chat/completions"),
             (ProviderId::Custom, "http://127.0.0.1:8000/v1/chat/completions"),
         ];
         for (provider, expected) in cases {
@@ -584,6 +630,7 @@ mod tests {
             ProviderId::Gemini,
             ProviderId::Nvidia,
             ProviderId::Zai,
+            ProviderId::Kimi,
             ProviderId::Custom,
         ] {
             let mut config = ProviderConfig::defaults(provider);
@@ -619,7 +666,11 @@ mod tests {
                     assert!(request.headers().contains_key("anthropic-version"));
                     assert_eq!(body.get("max_tokens").and_then(Value::as_u64), Some(4096));
                 }
-                ProviderId::OpenAi | ProviderId::Nvidia | ProviderId::Zai | ProviderId::Custom => {
+                ProviderId::OpenAi
+                | ProviderId::Nvidia
+                | ProviderId::Zai
+                | ProviderId::Kimi
+                | ProviderId::Custom => {
                     assert_eq!(body.get("stream").and_then(Value::as_bool), Some(true));
                     assert_eq!(
                         request.headers().get("authorization").unwrap(),
@@ -715,6 +766,11 @@ mod tests {
                 "nvidia/test-model",
             ),
             (
+                ProviderId::Kimi,
+                r#"{"data":[{"id":"kimi-k3"}]}"#,
+                "kimi-k3",
+            ),
+            (
                 ProviderId::Custom,
                 r#"{"data":[{"id":"custom/test-model"}]}"#,
                 "custom/test-model",
@@ -777,7 +833,10 @@ mod tests {
             ReasoningEffort::High,
             &mut openai_body,
         );
-        assert_eq!(openai_body.pointer("/reasoning/effort"), Some(&json!("high")));
+        assert_eq!(
+            openai_body.pointer("/reasoning/effort"),
+            Some(&json!("high"))
+        );
 
         let mut gemini_body = json!({});
         apply_reasoning_effort(
@@ -802,6 +861,15 @@ mod tests {
             anthropic_body.pointer("/output_config/effort"),
             Some(&json!("low"))
         );
+
+        let mut kimi_body = json!({});
+        apply_reasoning_effort(
+            ProviderId::Kimi,
+            "kimi-k3",
+            ReasoningEffort::High,
+            &mut kimi_body,
+        );
+        assert_eq!(kimi_body.get("reasoning_effort"), Some(&json!("max")));
     }
 
     #[test]

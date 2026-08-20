@@ -1,13 +1,20 @@
-import { Check, Languages, Monitor, Moon, Search, Sun, X } from "lucide-react";
+import { Check, ChevronRight, Cloud, Cpu, GitBranch, History, Languages, Monitor, Moon, Palette, Rocket, Search, Stethoscope, Sun, X } from "lucide-react";
 import { useMemo, useState } from "react";
 import { usePreferences, type AppLanguage, type LanguagePreference, type ThemePreference } from "../services/preferences";
 import { UpdateSettings } from "./UpdateSettings";
+import { DoctorPanel } from "./DoctorPanel";
+import { RecoveryPanel } from "./RecoveryPanel";
+import type { AiSettings } from "../types";
+import { HardwarePanel } from "./HardwarePanel";
+import { GitPanel } from "./GitPanel";
 
-type Props = { onClose: () => void; onOpenProviders: () => void };
+type Props = { onClose: () => void; onOpenProviders: () => void; projectPath: string | null; settings: AiSettings | null; onFilesRestored: (paths: string[]) => void };
+type PreferenceSection = "appearance" | "language" | "doctor" | "hardware" | "git" | "recovery" | "updates";
 
-export function PreferencesPanel({ onClose, onOpenProviders }: Props) {
+export function PreferencesPanel({ onClose, onOpenProviders, projectPath, settings, onFilesRestored }: Props) {
   const { theme, language, resolvedLanguage, setTheme, setLanguage, t } = usePreferences();
   const [query, setQuery] = useState("");
+  const [section, setSection] = useState<PreferenceSection>("appearance");
   const themes: { id: ThemePreference; label: string; description: string; icon: typeof Monitor }[] = [
     { id: "system", label: t("Sistema", "System"), description: t("Sigue Windows", "Follows Windows"), icon: Monitor },
     { id: "light", label: t("Claro", "Light"), description: t("Interfaz luminosa", "Light interface"), icon: Sun },
@@ -22,16 +29,41 @@ export function PreferencesPanel({ onClose, onOpenProviders }: Props) {
     const normalized = query.trim().toLocaleLowerCase();
     return languages.filter((item) => !normalized || `${item.name} ${item.nativeName} ${item.detail}`.toLocaleLowerCase().includes(normalized));
   }, [languages, query]);
+  const navigation = [
+    { id: "appearance" as const, label: t("Apariencia", "Appearance"), description: t("Tema visual", "Visual theme"), icon: Palette },
+    { id: "language" as const, label: t("Idioma", "Language"), description: t("Idioma de la interfaz", "Interface language"), icon: Languages },
+    { id: "providers" as const, label: t("Proveedores", "Providers"), description: t("Modelos y conexiones", "Models and connections"), icon: Cloud },
+    { id: "doctor" as const, label: "Doctor", description: t("Diagnóstico del sistema", "System diagnostics"), icon: Stethoscope },
+    { id: "hardware" as const, label: t("Equipo", "Hardware"), description: t("RAM, GPU y modelos", "RAM, GPU, and models"), icon: Cpu },
+    { id: "git" as const, label: "Git", description: t("Estado y diff local", "Local status and diff"), icon: GitBranch },
+    { id: "recovery" as const, label: t("Recuperación", "Recovery"), description: t("Deshacer cambios del agente", "Undo agent changes"), icon: History },
+    { id: "updates" as const, label: t("Actualizaciones", "Updates"), description: t("Versión y canal", "Version and channel"), icon: Rocket },
+  ];
+  const activeLabel = navigation.find((item) => item.id === section)?.label;
 
   return <div className="preferences-overlay" role="dialog" aria-modal="true" aria-label={t("Configuración", "Settings")}>
     <section className="preferences-panel">
-      <header><div><strong>{t("Configuración", "Settings")}</strong><span>{t("Apariencia e idioma", "Appearance and language")}</span></div><button className="icon-button" onClick={onClose} aria-label={t("Cerrar", "Close")}><X size={17} /></button></header>
-      <div className="preferences-content">
-        <section className="preference-section"><div className="preference-heading"><Sun size={15} /><div><strong>{t("Apariencia", "Appearance")}</strong><span>{t("Elige cómo se muestra NovaAI Code", "Choose how NovaAI Code looks")}</span></div></div><div className="theme-options">{themes.map((item) => { const Icon = item.icon; return <button type="button" key={item.id} className={theme === item.id ? "is-active" : ""} onClick={() => setTheme(item.id)}><Icon size={17} /><span><strong>{item.label}</strong><small>{item.description}</small></span>{theme === item.id && <Check size={14} />}</button>; })}</div></section>
-        <section className="preference-section"><div className="preference-heading"><Languages size={15} /><div><strong>{t("Idioma", "Language")}</strong><span>{t("Automático usa el idioma de Windows", "Automatic uses the Windows language")}</span></div></div><div className="language-search"><Search size={14} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder={t("Buscar idioma…", "Search languages…")} autoFocus={false} /></div><div className="language-list">{filtered.map((item) => <button type="button" key={item.id} className={language === item.id ? "is-active" : ""} onClick={() => setLanguage(item.id)}><span className="language-symbol">{item.id === "auto" ? <Monitor size={15} /> : item.id.toUpperCase()}</span><span><strong>{item.name}</strong><small>{item.nativeName}{item.id === "auto" ? ` · ${item.detail}` : ""}</small></span>{language === item.id && <Check size={14} />}</button>)}{!filtered.length && <p>{t("No encontramos ese idioma.", "No languages found.")}</p>}</div></section>
-        <UpdateSettings />
+      <header><div><strong>{t("Configuración", "Settings")}</strong><span>{t("Personaliza NovaAI Code", "Customize NovaAI Code")}</span></div><button className="icon-button" onClick={onClose} aria-label={t("Cerrar", "Close")}><X size={18} /></button></header>
+      <div className="preferences-layout">
+        <nav className="preferences-navigation" aria-label={t("Secciones de configuración", "Settings sections")}>
+          {navigation.map((item) => {
+            const Icon = item.icon;
+            const active = item.id === section;
+            return <button type="button" key={item.id} className={active ? "is-active" : ""} aria-current={active ? "page" : undefined} onClick={() => item.id === "providers" ? onOpenProviders() : setSection(item.id)}><Icon size={18} /><span><strong>{item.label}</strong><small>{item.description}</small></span>{item.id === "providers" ? <ChevronRight size={16} /> : active ? <span className="preferences-navigation__active" /> : null}</button>;
+          })}
+        </nav>
+        <main className="preferences-content">
+          <div className="preferences-page-title"><strong>{activeLabel}</strong><span>{section === "appearance" ? t("Elige cómo se muestra NovaAI Code", "Choose how NovaAI Code looks") : section === "language" ? t("Automático usa el idioma de Windows", "Automatic uses the Windows language") : section === "doctor" ? t("Comprueba el proyecto y la conexión activa", "Check the project and active connection") : section === "hardware" ? t("Comprueba qué modelos locales caben en tu equipo", "Check which local models fit your hardware") : section === "git" ? t("Revisa cambios sin modificar el repositorio", "Inspect changes without modifying the repository") : section === "recovery" ? t("Restaura cambios recientes del agente", "Restore recent agent changes") : t("Controla cómo recibes nuevas versiones", "Control how you receive new versions")}</span></div>
+          {section === "appearance" && <section className="preference-section"><div className="theme-options">{themes.map((item) => { const Icon = item.icon; return <button type="button" key={item.id} className={theme === item.id ? "is-active" : ""} onClick={() => setTheme(item.id)}><Icon size={19} /><span><strong>{item.label}</strong><small>{item.description}</small></span>{theme === item.id && <Check size={15} />}</button>; })}</div></section>}
+          {section === "language" && <section className="preference-section"><div className="language-search"><Search size={16} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder={t("Buscar idioma…", "Search languages…")} autoFocus /></div><div className="language-list">{filtered.map((item) => <button type="button" key={item.id} className={language === item.id ? "is-active" : ""} onClick={() => setLanguage(item.id)}><span className="language-symbol">{item.id === "auto" ? <Monitor size={16} /> : item.id.toUpperCase()}</span><span><strong>{item.name}</strong><small>{item.nativeName}{item.id === "auto" ? ` · ${item.detail}` : ""}</small></span>{language === item.id && <Check size={15} />}</button>)}{!filtered.length && <p>{t("No encontramos ese idioma.", "No languages found.")}</p>}</div></section>}
+          {section === "doctor" && <DoctorPanel projectPath={projectPath} settings={settings} onOpenProviders={onOpenProviders} />}
+          {section === "hardware" && <HardwarePanel projectPath={projectPath} />}
+          {section === "git" && <GitPanel projectPath={projectPath} />}
+          {section === "recovery" && <RecoveryPanel projectPath={projectPath} onRestored={onFilesRestored} />}
+          {section === "updates" && <UpdateSettings />}
+        </main>
       </div>
-      <footer><button type="button" className="secondary-button" onClick={onOpenProviders}>{t("Configurar proveedores", "Configure providers")}</button><button type="button" className="primary-button" onClick={onClose}>{t("Listo", "Done")}</button></footer>
+      <footer><span>{t("Los cambios se guardan automáticamente", "Changes are saved automatically")}</span><button type="button" className="primary-button" onClick={onClose}>{t("Listo", "Done")}</button></footer>
     </section>
   </div>;
 }

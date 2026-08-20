@@ -2,6 +2,7 @@ import { Check, ChevronDown, KeyRound, LoaderCircle, RefreshCw, Settings2, X } f
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ai, asDiagnostic, providerMeta } from "../services/ai";
 import { supportsReasoningEffort } from "../services/reasoningEffort";
+import { usePreferences } from "../services/preferences";
 import type { AiSettings, ModelInfo, ProviderId, ReasoningEffort } from "../types";
 import { ProviderLogo } from "./ProviderLogo";
 
@@ -13,14 +14,11 @@ type Props = {
   onConfigure: () => void;
 };
 
-const providerOrder: ProviderId[] = ["ollama", "lm_studio", "open_ai", "anthropic", "gemini", "nvidia", "zai", "custom"];
-const effortOptions: { value: ReasoningEffort; label: string; hint: string }[] = [
-  { value: "low", label: "Bajo", hint: "Menor latencia y menos razonamiento" },
-  { value: "medium", label: "Medio", hint: "Equilibrio entre rapidez y razonamiento" },
-  { value: "high", label: "Alto", hint: "Más razonamiento para tareas complejas" },
-];
+const providerOrder: ProviderId[] = ["ollama", "lm_studio", "open_ai", "anthropic", "gemini", "nvidia", "zai", "kimi", "custom"];
+const effortOptions: ReasoningEffort[] = ["low", "medium", "high"];
 
 export function ChatModelPicker({ projectPath, settings, disabled, onChange, onConfigure }: Props) {
+  const { t } = usePreferences();
   const [open, setOpen] = useState(false);
   const [selected, setSelected] = useState<ProviderId>(settings.activeProvider ?? "ollama");
   const [models, setModels] = useState<ModelInfo[]>([]);
@@ -110,37 +108,37 @@ export function ChatModelPicker({ projectPath, settings, disabled, onChange, onC
   }
 
   return <div className="chat-model-picker" ref={root}>
-    <button className="chat-model-trigger" type="button" onClick={() => void openPicker()} disabled={disabled} title="Cambiar proveedor o modelo" aria-expanded={open}>
+    <button className="chat-model-trigger" type="button" onClick={() => void openPicker()} disabled={disabled} title={t("Cambiar proveedor o modelo", "Change provider or model")} aria-expanded={open}>
       {active ? <ProviderLogo provider={active.provider} size="small" /> : <span className="provider-logo provider-logo--small" />}
-      <strong>{active ? providerMeta[active.provider].name : "Modelo"}</strong>
-      <span className="chat-model-trigger__model">{active?.model || "Seleccionar"}</span>
-      {active && supportsReasoningEffort(active.provider, active.model) && <span className="chat-model-trigger__effort">{effortOptions.find((item) => item.value === (active.reasoningEffort ?? "medium"))?.label}</span>}
+      <strong>{active ? providerMeta[active.provider].name : t("Modelo", "Model")}</strong>
+      <span className="chat-model-trigger__model">{active?.model || t("Seleccionar", "Select")}</span>
+      {active && supportsReasoningEffort(active.provider, active.model) && <span className="chat-model-trigger__effort">{active.reasoningEffort === "low" ? t("Bajo", "Low") : active.reasoningEffort === "high" ? t("Alto", "High") : t("Medio", "Medium")}</span>}
       <ChevronDown size={12} />
     </button>
-    {open && <section className="chat-model-menu" aria-label="Seleccionar modelo">
-      <header><div><strong>Modelo</strong><span>Cambia sin salir del chat</span></div><button type="button" onClick={() => setOpen(false)} aria-label="Cerrar"><X size={14} /></button></header>
+    {open && <section className="chat-model-menu" aria-label={t("Seleccionar modelo", "Select model")}>
+      <header><div><strong>{t("Modelo", "Model")}</strong><span>{t("Cambia sin salir del chat", "Switch without leaving the chat")}</span></div><button type="button" onClick={() => setOpen(false)} aria-label={t("Cerrar", "Close")}><X size={14} /></button></header>
       <div className="model-provider-grid">
         {providerOrder.map((provider) => {
           const config = settings.providers.find((item) => item.provider === provider)!;
           return <button type="button" key={provider} className={selected === provider ? "is-active" : ""} onClick={() => void chooseProvider(provider)} disabled={saving}>
             <ProviderLogo provider={provider} size="medium" />
-            <span><strong>{providerMeta[provider].name.replace("Google ", "").replace(" API", "")}</strong><small>{providerMeta[provider].type === "local" ? "Local" : "API"}</small></span>
+            <span><strong>{providerMeta[provider].name.replace("Google ", "").replace(" API", "")}</strong><small>{providerMeta[provider].type === "local" ? t("Local", "Local") : "API"}</small></span>
             <em>{providerMeta[provider].requiresKey && !config.apiKeyConfigured ? <KeyRound size={11} /> : config.model ? <Check size={11} /> : null}</em>
           </button>;
         })}
       </div>
-      {!canLoad ? <div className="model-menu-empty"><KeyRound size={16} /><span>Falta la API key de {providerMeta[selected].name}.</span><button type="button" onClick={() => { setOpen(false); onConfigure(); }}><Settings2 size={12} />Configurar</button></div> : <>
-        <div className="model-search"><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Buscar modelo…" autoFocus /><button type="button" onClick={() => void loadModels()} disabled={loading} title="Actualizar modelos">{loading ? <LoaderCircle className="spin" size={14} /> : <RefreshCw size={14} />}</button></div>
+      {!canLoad ? <div className="model-menu-empty"><KeyRound size={16} /><span>{t("Falta la API key de", "Missing API key for")} {providerMeta[selected].name}.</span><button type="button" onClick={() => { setOpen(false); onConfigure(); }}><Settings2 size={12} />{t("Configurar", "Configure")}</button></div> : <>
+        <div className="model-search"><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder={t("Buscar modelo…", "Search models…")} autoFocus /><button type="button" onClick={() => void loadModels()} disabled={loading} title={t("Actualizar modelos", "Refresh models")}>{loading ? <LoaderCircle className="spin" size={14} /> : <RefreshCw size={14} />}</button></div>
         <div className="model-option-list">
-          {loading && !models.length ? <div className="model-menu-status"><LoaderCircle className="spin" size={14} />Consultando modelos…</div> : filtered.map((model) => <button type="button" key={model.id} className={selectedConfig.model === model.id ? "is-active" : ""} onClick={() => void chooseModel(model.id)} disabled={saving || model.loaded === false} title={model.id}>
+          {loading && !models.length ? <div className="model-menu-status"><LoaderCircle className="spin" size={14} />{t("Consultando modelos…", "Loading models…")}</div> : filtered.map((model) => <button type="button" key={model.id} className={selectedConfig.model === model.id ? "is-active" : ""} onClick={() => void chooseModel(model.id)} disabled={saving || model.loaded === false} title={model.id}>
             <ProviderLogo provider={selected} size="medium" /><span className="model-option-copy"><strong>{model.name}</strong><small>{model.id}</small></span>
-            {model.loaded === false ? <em>No cargado</em> : selectedConfig.model === model.id ? <Check size={14} /> : null}
+            {model.loaded === false ? <em>{t("No cargado", "Not loaded")}</em> : selectedConfig.model === model.id ? <Check size={14} /> : null}
           </button>)}
-          {!loading && !filtered.length && <div className="model-menu-status">{selected === "custom" ? "No se pudo listar modelos. Puedes escribir el identificador exacto en Configuración." : "No hay modelos disponibles."}</div>}
+          {!loading && !filtered.length && <div className="model-menu-status">{selected === "custom" ? t("No se pudo listar modelos. Puedes escribir el identificador exacto en Configuración.", "Models could not be listed. You can enter the exact identifier in Settings.") : t("No hay modelos disponibles.", "No models available.")}</div>}
         </div>
-        {effortSupported ? <div className="reasoning-effort"><div><strong>Esfuerzo</strong><span>Controla cuánto razona antes de responder</span></div><div role="group" aria-label="Esfuerzo de razonamiento">{effortOptions.map((item) => <button type="button" key={item.value} className={(selectedConfig.reasoningEffort ?? "medium") === item.value ? "is-active" : ""} onClick={() => void chooseEffort(item.value)} disabled={saving} title={item.hint}>{item.label}</button>)}</div></div> : selectedConfig.model && <div className="reasoning-effort reasoning-effort--unavailable"><div><strong>Esfuerzo predeterminado</strong><span>Este modelo no permite cambiarlo</span></div></div>}
+        {effortSupported ? <div className="reasoning-effort"><div><strong>{t("Esfuerzo", "Effort")}</strong><span>{t("Controla cuánto razona antes de responder", "Controls how much the model reasons before responding")}</span></div><div role="group" aria-label={t("Esfuerzo de razonamiento", "Reasoning effort")}>{effortOptions.map((item) => <button type="button" key={item} className={(selectedConfig.reasoningEffort ?? "medium") === item ? "is-active" : ""} onClick={() => void chooseEffort(item)} disabled={saving}>{item === "low" ? t("Bajo", "Low") : item === "high" ? t("Alto", "High") : t("Medio", "Medium")}</button>)}</div></div> : selectedConfig.model && <div className="reasoning-effort reasoning-effort--unavailable"><div><strong>{t("Esfuerzo predeterminado", "Default effort")}</strong><span>{t("Este modelo no permite cambiarlo", "This model does not allow changing it")}</span></div></div>}
       </>}
-      {error && <div className="model-menu-error">{error}<button type="button" onClick={() => { setOpen(false); onConfigure(); }}>Revisar configuración</button></div>}
+      {error && <div className="model-menu-error">{error}<button type="button" onClick={() => { setOpen(false); onConfigure(); }}>{t("Revisar configuración", "Review settings")}</button></div>}
     </section>}
   </div>;
 }

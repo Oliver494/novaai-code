@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { archiveConversation, conversationMatches, duplicateConversation, isConversationBusy, pinConversation, renameConversation, sortConversations } from "../src/services/conversationActions.ts";
-import { loadConversations, migrateConversation, saveConversations } from "../src/services/conversations.ts";
+import { createConversation, loadConversations, migrateConversation, saveConversations } from "../src/services/conversations.ts";
 import type { Conversation } from "../src/types.ts";
 
 function conversation(id: string, overrides: Partial<Conversation> = {}): Conversation {
@@ -14,6 +14,7 @@ function conversation(id: string, overrides: Partial<Conversation> = {}): Conver
     pinnedOrder: null,
     archived: false,
     archivedAt: null,
+    assistantMode: "code",
     approvalMode: "ask",
     messages: [],
     createdAt: 1,
@@ -77,7 +78,24 @@ test("migra conversaciones antiguas con valores seguros", () => {
   assert.equal(migrated.pinned, false);
   assert.equal(migrated.archived, false);
   assert.equal(migrated.customTitle, false);
+  assert.equal(migrated.assistantMode, "code");
   assert.equal(migrateConversation({ id: "otro", projectPath: "C:\\otro", messages: [] }, "C:\\proyecto"), null);
+});
+
+test("recuerda el modo y usa NovaAI Code por defecto cuando hay proyecto", () => {
+  assert.equal(createConversation("C:\\proyecto").assistantMode, "code");
+  assert.equal(createConversation(null).assistantMode, "chat");
+  assert.equal(migrateConversation({ ...conversation("chat"), assistantMode: "chat" }, "C:\\proyecto")?.assistantMode, "chat");
+});
+
+test("recupera un chat cuya respuesta quedó vacía al cerrarse", () => {
+  const item = conversation("interrupted", { messages: [
+    { id: "u", role: "user", content: "continúa", createdAt: 1 },
+    { id: "a", role: "assistant", content: "", createdAt: 2 },
+  ] });
+  const migrated = migrateConversation(item, "C:\\proyecto")!;
+  assert.equal(migrated.messages.length, 1);
+  assert.equal(migrated.lastError, true);
 });
 
 test("persistencia mantiene aislamiento entre proyectos", () => {
@@ -86,4 +104,31 @@ test("persistencia mantiene aislamiento entre proyectos", () => {
   assert.deepEqual(saveConversations("C:\\proyecto", [conversation("a"), conversation("x", { projectPath: "C:\\otro" })]), { ok: true });
   assert.deepEqual(loadConversations("C:\\proyecto").map((item) => item.id), ["a"]);
   assert.deepEqual(loadConversations("C:\\otro"), []);
+});
+
+test("NovaAI y NovaAI Code usan almacenes independientes", () => {
+  const store = new Map<string, string>();
+  Object.defineProperty(globalThis, "localStorage", { configurable: true, value: { getItem: (key: string) => store.get(key) ?? null, setItem: (key: string, value: string) => store.set(key, value) } });
+  const chat = conversation("chat", { projectPath: null, assistantMode: "chat" });
+  const code = conversation("code", { projectPath: "C:\\proyecto", assistantMode: "code" });
+  assert.deepEqual(saveConversations(null, [chat], "chat"), { ok: true });
+  assert.deepEqual(saveConversations("C:\\proyecto", [code], "code"), { ok: true });
+  assert.deepEqual(loadConversations(null, "chat").map((item) => item.id), ["chat"]);
+  assert.deepEqual(loadConversations("C:\\proyecto", "code").map((item) => item.id), ["code"]);
+  assert.deepEqual(loadConversations(null, "chat").map((item) => item.assistantMode), ["chat"]);
+  assert.deepEqual(loadConversations("C:\\proyecto", "code").map((item) => item.assistantMode), ["code"]);
+});
+
+test("migra un chat general guardado antes dentro de un proyecto", () => {
+  const store = new Map<string, string>();
+  Object.defineProperty(globalThis, "localStorage", { configurable: true, value: { getItem: (key: string) => store.get(key) ?? null, setItem: (key: string, value: string) => store.set(key, value) } });
+  const legacyKey = `novaai-code:conversations:v1:${encodeURIComponent("c:\\proyecto")}`;
+  store.set(legacyKey, JSON.stringify([
+    conversation("general", { assistantMode: "chat" }),
+    conversation("agent", { assistantMode: "code" }),
+  ]));
+  assert.deepEqual(loadConversations("C:\\proyecto", "code").map((item) => item.id), ["agent"]);
+  const migrated = loadConversations(null, "chat");
+  assert.deepEqual(migrated.map((item) => item.id), ["general"]);
+  assert.equal(migrated[0].projectPath, null);
 });

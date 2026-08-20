@@ -10,6 +10,7 @@ pub enum ProviderId {
     Gemini,
     Nvidia,
     Zai,
+    Kimi,
     Custom,
 }
 
@@ -42,6 +43,7 @@ impl ProviderId {
             Self::Gemini => "gemini",
             Self::Nvidia => "nvidia",
             Self::Zai => "zai",
+            Self::Kimi => "kimi",
             Self::Custom => "custom",
         }
     }
@@ -67,6 +69,7 @@ impl ProviderId {
             Self::Gemini => "https://generativelanguage.googleapis.com/v1beta",
             Self::Nvidia => "https://integrate.api.nvidia.com/v1",
             Self::Zai => "https://api.z.ai/api/paas/v4",
+            Self::Kimi => "https://api.moonshot.ai/v1",
             Self::Custom => "http://127.0.0.1:8000/v1",
         }
     }
@@ -80,6 +83,7 @@ impl ProviderId {
             Self::Gemini => "Google Gemini",
             Self::Nvidia => "NVIDIA API",
             Self::Zai => "Z.AI",
+            Self::Kimi => "Kimi",
             Self::Custom => "Proveedor personalizado",
         }
     }
@@ -137,6 +141,7 @@ impl Default for AiSettings {
             ProviderId::Gemini,
             ProviderId::Nvidia,
             ProviderId::Zai,
+            ProviderId::Kimi,
             ProviderId::Custom,
         ]
         .into_iter()
@@ -173,11 +178,22 @@ pub struct LocalModelCatalogItem {
 }
 
 #[derive(Clone, Debug, Serialize)]
-#[serde(rename_all = "camelCase", rename_all_fields = "camelCase", tag = "type")]
+#[serde(
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase",
+    tag = "type"
+)]
 pub enum LocalModelDownloadEvent {
-    Status { message: String, progress: Option<u8> },
-    Done { model_id: String },
-    Error { diagnostic: super::error::Diagnostic },
+    Status {
+        message: String,
+        progress: Option<u8>,
+    },
+    Done {
+        model_id: String,
+    },
+    Error {
+        diagnostic: super::error::Diagnostic,
+    },
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -194,6 +210,15 @@ pub struct UploadedAttachment {
     pub mime_type: String,
     pub kind: String,
     pub data: String,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExternalFolderGrant {
+    pub id: String,
+    pub path: String,
+    pub name: String,
+    pub access: String,
 }
 
 #[derive(Clone, Debug)]
@@ -214,9 +239,13 @@ pub struct ChatRequest {
     #[serde(default)]
     pub uploads: Vec<UploadedAttachment>,
     #[serde(default)]
+    pub external_folders: Vec<ExternalFolderGrant>,
+    #[serde(default)]
     pub workspace_access: bool,
     #[serde(default)]
     pub can_edit: bool,
+    #[serde(default)]
+    pub code_mode: bool,
 }
 
 #[derive(Clone, Debug, Serialize)]

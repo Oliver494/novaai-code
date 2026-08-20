@@ -12,11 +12,13 @@ import {
 } from "lucide-react";
 import { MouseEvent, useEffect, useRef, useState } from "react";
 import type { FileNode } from "../types";
+import { usePreferences } from "../services/preferences";
 import { FileTypeIcon } from "./FileTypeIcon";
 
 type ContextState = { node: FileNode; x: number; y: number } | null;
 
 type Props = {
+  projectName: string;
   nodes: FileNode[];
   selectedPath: string | null;
   loading: boolean;
@@ -75,6 +77,7 @@ function TreeNode({ node, depth, ...props }: { node: FileNode; depth: number } &
 }
 
 export function FileTree(props: Props) {
+  const { t } = usePreferences();
   const [context, setContext] = useState<ContextState>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -99,27 +102,27 @@ export function FileTree(props: Props) {
   return (
     <div className="file-tree">
       <div className="explorer-toolbar">
-        <span>Proyecto</span>
+        <div className="explorer-toolbar__title"><span>{t("Archivos", "Files")}</span><small title={props.projectName}>{props.projectName}</small></div>
         <div>
-          <button onClick={() => props.onCreate("new-file")} title="Nuevo archivo" aria-label="Nuevo archivo"><FilePlus2 size={16} strokeWidth={1.8} /></button>
-          <button onClick={() => props.onCreate("new-folder")} title="Nueva carpeta" aria-label="Nueva carpeta"><FolderPlus size={16} strokeWidth={1.8} /></button>
-          <button onClick={props.onRefresh} title="Actualizar archivos" aria-label="Actualizar archivos" disabled={props.loading}><RefreshCw className={props.loading ? "spin" : ""} size={16} strokeWidth={1.8} /></button>
+          <button onClick={() => props.onCreate("new-file")} title={t("Nuevo archivo", "New file")} aria-label={t("Nuevo archivo", "New file")}><FilePlus2 size={16} strokeWidth={1.8} /></button>
+          <button onClick={() => props.onCreate("new-folder")} title={t("Nueva carpeta", "New folder")} aria-label={t("Nueva carpeta", "New folder")}><FolderPlus size={16} strokeWidth={1.8} /></button>
+          <button onClick={props.onRefresh} title={t("Actualizar archivos", "Refresh files")} aria-label={t("Actualizar archivos", "Refresh files")} disabled={props.loading}><RefreshCw className={props.loading ? "spin" : ""} size={16} strokeWidth={1.8} /></button>
         </div>
       </div>
       <div className="tree-scroll">
-        {props.loading && props.nodes.length === 0 ? <div className="tree-status">Leyendo proyecto…</div> : (
+        {props.loading && props.nodes.length === 0 ? <div className="tree-status">{t("Leyendo proyecto…", "Reading project…")}</div> : (
           <ul className="tree-root">{props.nodes.map((node) => <TreeNode key={node.relativePath} node={node} depth={0} {...props} />)}</ul>
         )}
       </div>
       {context && (
         <div ref={menuRef} className="context-menu" style={{ left: Math.min(context.x, window.innerWidth - 220), top: Math.min(context.y, window.innerHeight - 300) }} onPointerDown={(event) => event.stopPropagation()} role="menu">
-          {context.node.isDirectory && <><button role="menuitem" onClick={action((node) => props.onCreate("new-file", node))}><FilePlus2 size={16} strokeWidth={1.8} />Nuevo archivo</button><button role="menuitem" onClick={action((node) => props.onCreate("new-folder", node))}><FolderPlus size={16} strokeWidth={1.8} />Nueva carpeta</button><span className="context-separator" /></>}
-          <button role="menuitem" onClick={action(props.onRename)}><Pencil size={16} strokeWidth={1.8} />Renombrar</button>
-          <button role="menuitem" onClick={action(props.onReveal)}><FolderSearch size={16} strokeWidth={1.8} />Mostrar en el Explorador</button>
-          <button role="menuitem" onClick={action((node) => props.onCopy(node.path, "Ruta copiada"))}><Copy size={16} strokeWidth={1.8} />Copiar ruta</button>
-          <button role="menuitem" onClick={action((node) => props.onCopy(node.relativePath, "Ruta relativa copiada"))}><Copy size={16} strokeWidth={1.8} />Copiar ruta relativa</button>
+          {context.node.isDirectory && <><button role="menuitem" onClick={action((node) => props.onCreate("new-file", node))}><FilePlus2 size={16} strokeWidth={1.8} />{t("Nuevo archivo", "New file")}</button><button role="menuitem" onClick={action((node) => props.onCreate("new-folder", node))}><FolderPlus size={16} strokeWidth={1.8} />{t("Nueva carpeta", "New folder")}</button><span className="context-separator" /></>}
+          <button role="menuitem" onClick={action(props.onRename)}><Pencil size={16} strokeWidth={1.8} />{t("Renombrar", "Rename")}</button>
+          <button role="menuitem" onClick={action(props.onReveal)}><FolderSearch size={16} strokeWidth={1.8} />{t("Mostrar en el Explorador", "Show in File Explorer")}</button>
+          <button role="menuitem" onClick={action((node) => props.onCopy(node.path, t("Ruta copiada", "Path copied")))}><Copy size={16} strokeWidth={1.8} />{t("Copiar ruta", "Copy path")}</button>
+          <button role="menuitem" onClick={action((node) => props.onCopy(node.relativePath, t("Ruta relativa copiada", "Relative path copied")))}><Copy size={16} strokeWidth={1.8} />{t("Copiar ruta relativa", "Copy relative path")}</button>
           <span className="context-separator" />
-          <button role="menuitem" className="context-danger" onClick={action(props.onDelete)}><Trash2 size={16} strokeWidth={1.8} />Eliminar</button>
+          <button role="menuitem" className="context-danger" onClick={action(props.onDelete)}><Trash2 size={16} strokeWidth={1.8} />{t("Eliminar", "Delete")}</button>
         </div>
       )}
     </div>

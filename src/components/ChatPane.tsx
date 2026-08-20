@@ -1,16 +1,17 @@
 import {
-  AlertCircle, Check, ChevronDown, Clipboard, Edit3, FileCode2, ShieldCheck,
-  Image, LoaderCircle, MessageSquarePlus, Plus, Send, Settings2, Square,
+  AlertCircle, Bot, Check, ChevronDown, Clipboard, Code2, Edit3, FileCode2, FolderPlus, ShieldCheck,
+  Image, LoaderCircle, Plus, Send, Settings2, Square,
   Upload, X,
 } from "lucide-react";
 import { type ClipboardEvent as ReactClipboardEvent, useEffect, useMemo, useRef, useState } from "react";
 import { ai, asDiagnostic, providerMeta } from "../services/ai";
 import { agent } from "../services/agent";
+import { requestsProjectAction } from "../services/actionIntent";
 import { createConversation, loadConversations, saveConversations } from "../services/conversations";
 import { archiveConversation, conversationMarkdown, duplicateConversation, isConversationBusy, pinConversation, renameConversation, sortConversations } from "../services/conversationActions";
-import { chooseChatFiles, errorMessage, projectFiles } from "../services/fileSystem";
+import { chooseChatFiles, chooseExternalFolder, errorMessage, projectFiles } from "../services/fileSystem";
 import { usePreferences } from "../services/preferences";
-import type { AgentCommandEvent, AgentTask, AiProjectAction, AiSettings, ChatMessage, ChatUpload, Conversation, DetectedCommand, Diagnostic, OpenFile, ProjectInfo } from "../types";
+import type { AgentCommandEvent, AgentTask, AiProjectAction, AiSettings, AppliedChange, AssistantWorkspace, ChatMessage, ChatUpload, ContextReference, Conversation, DetectedCommand, Diagnostic, ExternalFolderGrant, OpenFile, ProjectInfo } from "../types";
 import { AgentTaskCard } from "./AgentTaskCard";
 import { AssistantMessageContent } from "./AssistantMessageContent";
 import { DiagnosticCard } from "./DiagnosticCard";
@@ -21,10 +22,15 @@ import { ConversationDialog } from "./ConversationDialog";
 
 type PreviewAction = AiProjectAction & { before?: string; isNew?: boolean };
 type Props = {
+  mode: AssistantWorkspace;
+  activeWorkspace: boolean;
   project: ProjectInfo | null;
+  projects: ProjectInfo[];
   openFiles: OpenFile[];
   settings: AiSettings | null;
   sidebarOpen: boolean;
+  onAddProject: () => void;
+  onSelectProject: (path: string) => void;
   onConfigure: () => void;
   onSettingsChange: (settings: AiSettings) => void;
   onFilesChanged: (paths: string[]) => Promise<void>;
@@ -50,8 +56,13 @@ function validActions(value: unknown): AiProjectAction[] {
 
 function proposedActions(content: string): AiProjectAction[] {
   const match = content.match(/<nova_actions>([\s\S]*?)<\/nova_actions>/);
-  if (!match) return [];
-  return validActions(match[1].trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, ""));
+  if (match) return validActions(match[1].trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, ""));
+
+  // Some otherwise capable models return the same action JSON without Nova's
+  // wrapper. Accept only JSON that validates as an action list; normal prose
+  // and ordinary code blocks continue to be treated as chat content.
+  const jsonBlock = content.match(/```json\s*\r?\n([\s\S]*?)```/i);
+  return validActions(jsonBlock?.[1]?.trim() ?? content.trim());
 }
 
 function codeBlockAction(content: string, prompt: string): AiProjectAction[] {
@@ -76,47 +87,30 @@ function isSimpleGreeting(prompt: string) {
   return /^(hola|hello|hi|hey|buenas|buenos días|buenas tardes|buenas noches|qué tal|que tal)( [\p{L}\p{N}_-]+)?$/u.test(normalized);
 }
 
-function requestsProjectAction(prompt: string, history: ChatMessage[]) {
-  const current = prompt.toLocaleLowerCase();
-  const directAction = /\b(crea|crear|créalo|crealo|crearla|haz|hazlo|edita|editar|modifica|modificar|implementa|implementar|añade|agrega|elimina|eliminar|borra|borrar|renombra|renombrar|mueve|mover|arregla|arreglar|arréglalo|arreglalo|corrige|corregir)\b/u;
-  // Una ruta externa no puede convertirse en una operación, aunque el modelo lo proponga.
-  if (/(?:\b[a-z]:[\\/]|\\\\)/i.test(prompt)) return false;
-  if (directAction.test(current)) return true;
-  // Preguntar si Nova puede ver o leer una carpeta nunca es permiso para modificarla.
-  if (/\b(puedes?|puede|puedo|ver|leer|muestra|mostrar|explora|explorar|qué hay|que hay|tienes acceso)\b/u.test(current)) return false;
-  // Only short continuation messages inherit the previous task. Ordinary new
-  // questions must never become file operations just because an older message
-  // mentioned HTML, CSS, or a file.
-  if (!/^(sí|si|hazlo|continúa|continua|sigue|adelante|ok|vale)[!.\s]*$/u.test(current.trim())) return false;
-  const previousUserMessage = [...history].reverse().find((item) => item.role === "user")?.content ?? "";
-  return directAction.test(previousUserMessage.toLocaleLowerCase());
-}
-
 function requestHistory(messages: ChatMessage[]) {
-  // NVIDIA and several cloud models have different context limits. Keeping the
-  // latest turns preserves the active task without repeatedly sending a whole
-  // long chat (or old generated files) on every request.
-  return messages.slice(-6).map((item) => ({
+  // A conversation is its own memory. Do not silently discard earlier turns;
+  // providers report a clear context-limit diagnostic when needed.
+  return messages.map((item) => ({
     ...item,
-    content: (item.role === "assistant" ? visibleAnswer(item.content) : item.content).slice(-24_000),
+    content: item.role === "assistant" ? visibleAnswer(item.content) : item.content,
   }));
 }
 
-function message(role: ChatMessage["role"], content: string, uploads?: ChatMessage["uploads"]): ChatMessage {
-  return { id: crypto.randomUUID(), role, content, createdAt: Date.now(), uploads };
+function message(role: ChatMessage["role"], content: string, uploads?: ChatMessage["uploads"], contextReferences?: ContextReference[]): ChatMessage {
+  return { id: crypto.randomUUID(), role, content, createdAt: Date.now(), uploads, contextReferences };
 }
 
 const SLASH_COMMANDS = [
-  { command: "/new", label: "Nueva conversación", description: "Abre un chat nuevo" },
-  { command: "/clear", label: "Limpiar chat", description: "Borra los mensajes de este chat" },
-  { command: "/compact", label: "Compactar contexto", description: "Resume el historial para usar menos contexto" },
-  { command: "/test", label: "Ejecutar pruebas", description: "Detecta y ejecuta las pruebas del proyecto" },
-  { command: "/build", label: "Compilar proyecto", description: "Detecta y ejecuta la compilación" },
-  { command: "/check", label: "Comprobar proyecto", description: "Ejecuta lint o comprobación de tipos" },
-  { command: "/help", label: "Ver comandos", description: "Muestra la ayuda rápida" },
+  { command: "/new", label: ["Nueva conversación", "New conversation"], description: ["Abre un chat nuevo", "Open a new chat"] },
+  { command: "/clear", label: ["Limpiar chat", "Clear chat"], description: ["Borra los mensajes de este chat", "Delete the messages in this chat"] },
+  { command: "/compact", label: ["Compactar contexto", "Compact context"], description: ["Resume el historial para usar menos contexto", "Summarize history to use less context"] },
+  { command: "/test", label: ["Ejecutar pruebas", "Run tests"], description: ["Detecta y ejecuta las pruebas del proyecto", "Detect and run project tests"] },
+  { command: "/build", label: ["Compilar proyecto", "Build project"], description: ["Detecta y ejecuta la compilación", "Detect and run the build"] },
+  { command: "/check", label: ["Comprobar proyecto", "Check project"], description: ["Ejecuta lint o comprobación de tipos", "Run lint or type checking"] },
+  { command: "/help", label: ["Ver comandos", "View commands"], description: ["Muestra la ayuda rápida", "Show quick help"] },
 ];
 
-export function ChatPane({ project, openFiles, settings, sidebarOpen, onConfigure, onSettingsChange, onFilesChanged }: Props) {
+export function ChatPane({ mode, activeWorkspace, project, projects, openFiles, settings, sidebarOpen, onAddProject, onSelectProject, onConfigure, onSettingsChange, onFilesChanged }: Props) {
   const { t } = usePreferences();
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [activeId, setActiveId] = useState("");
@@ -135,6 +129,7 @@ export function ChatPane({ project, openFiles, settings, sidebarOpen, onConfigur
   const [preview, setPreview] = useState<PreviewAction[]>([]);
   const [applying, setApplying] = useState(false);
   const [detectedCommands, setDetectedCommands] = useState<DetectedCommand[]>([]);
+  const [modePickerOpen, setModePickerOpen] = useState(false);
   const [pendingCommand, setPendingCommand] = useState<{ conversationId: string; command: DetectedCommand } | null>(null);
   const [commandBusy, setCommandBusy] = useState(false);
   const [showJumpToBottom, setShowJumpToBottom] = useState(false);
@@ -147,11 +142,15 @@ export function ChatPane({ project, openFiles, settings, sidebarOpen, onConfigur
   const assistantBuffer = useRef("");
   const skipPersistence = useRef(false);
   const previewOwner = useRef<{ conversationId: string; messageId: string } | null>(null);
+  const modePickerRef = useRef<HTMLDivElement | null>(null);
   const active = settings?.providers.find((item) => item.provider === settings.activeProvider) ?? null;
   const ready = !!active?.model && (!providerMeta[active.provider].requiresKey || active.apiKeyConfigured);
   const conversation = conversations.find((item) => item.id === activeId) ?? conversations[0];
   const generatingHere = generating && generatingConversationId === conversation?.id;
-  const commandSuggestions = input.trimStart().startsWith("/") ? SLASH_COMMANDS.filter((item) => item.command.startsWith(input.trimStart().toLocaleLowerCase())) : [];
+  const codeMode = mode === "code";
+  const modeSwitchDisabled = true;
+  const availableCommands = codeMode ? SLASH_COMMANDS : SLASH_COMMANDS.filter((item) => !["/test", "/build", "/check"].includes(item.command));
+  const commandSuggestions = input.trimStart().startsWith("/") ? availableCommands.filter((item) => item.command.startsWith(input.trimStart().toLocaleLowerCase())) : [];
   const lastMessageContent = conversation?.messages[conversation.messages.length - 1]?.content ?? "";
 
   function scrollToBottom(behavior: ScrollBehavior = "smooth") {
@@ -182,9 +181,12 @@ export function ChatPane({ project, openFiles, settings, sidebarOpen, onConfigur
   }, [lastMessageContent, conversation?.messages.length, diagnostic, generatingHere, status]);
 
   useEffect(() => {
-    const loaded = loadConversations(project?.path ?? null);
-    const initial = (loaded.length ? loaded : [createConversation(project?.path ?? null)]).map((item) => ({
+    const storageProject = codeMode ? project?.path ?? null : null;
+    if (codeMode && !storageProject) return;
+    const loaded = loadConversations(storageProject, mode);
+    const initial = (loaded.length ? loaded : [createConversation(storageProject, mode)]).map((item) => ({
       ...item,
+      assistantMode: mode,
       // Nunca mostramos ni conservamos razonamientos internos de respuestas anteriores.
       messages: item.messages.map(({ reasoning: _reasoning, ...entry }) => entry),
     }));
@@ -193,11 +195,16 @@ export function ChatPane({ project, openFiles, settings, sidebarOpen, onConfigur
     setActiveId(initial[0].id);
     setInput(""); setUploads([]); setProjectAttachments([]); setPreview([]); setDiagnostic(null);
     setGeneratingConversationId(null);
-  }, [project?.path]);
+  }, [codeMode, mode, project?.path]);
 
   useEffect(() => {
     // El estado visual de una petición pertenece únicamente al chat que la inició.
     setInput(""); setUploads([]); setProjectAttachments([]); setAttachmentOpen(false); setPreview([]); setDiagnostic(null);
+    const selected = conversations.find((item) => item.id === activeId);
+    if (selected?.lastError) {
+      lastPrompt.current = [...selected.messages].reverse().find((item) => item.role === "user")?.content ?? "";
+      setDiagnostic({ code: "INTERRUPTED_SESSION", title: t("Respuesta interrumpida", "Interrupted response"), explanation: t("Nova se cerró o perdió la conexión antes de terminar esta respuesta.", "Nova closed or lost the connection before completing this response."), cause: t("La conversación y la pregunta se conservaron localmente.", "The conversation and question were preserved locally."), action: t("Pulsa Reintentar para continuar.", "Press Retry to continue."), technicalDetails: null, retryable: true });
+    }
   }, [activeId]);
 
   useEffect(() => {
@@ -208,10 +215,10 @@ export function ChatPane({ project, openFiles, settings, sidebarOpen, onConfigur
   useEffect(() => {
     if (skipPersistence.current) { skipPersistence.current = false; return; }
     if (conversations.length) {
-      const result = saveConversations(project?.path ?? null, conversations);
+      const result = saveConversations(codeMode ? project?.path ?? null : null, conversations, mode);
       setPersistenceError(result.ok ? "" : "No se pudieron guardar los chats. El almacenamiento local está lleno o no está disponible.");
     }
-  }, [conversations, project?.path]);
+  }, [codeMode, conversations, mode, project?.path]);
 
   const estimatedTokens = useMemo(() => Math.ceil((input.length + projectAttachments.reduce((sum, path) => sum + (openFiles.find((file) => file.relativePath === path)?.content.length ?? 0), 0) + uploads.filter((item) => item.kind === "text").reduce((sum, item) => sum + item.data.length, 0)) / 4), [input, openFiles, projectAttachments, uploads]);
 
@@ -223,8 +230,13 @@ export function ChatPane({ project, openFiles, settings, sidebarOpen, onConfigur
     setConversations((items) => items.map((item) => item.id === id ? updater(item) : item));
   }
 
+  function changeAssistantMode(_nextMode: Conversation["assistantMode"]) {
+    // Product workspaces are selected globally; conversations cannot cross them.
+    setModePickerOpen(false);
+  }
+
   function newConversation() {
-    const created = createConversation(project?.path ?? null);
+    const created = createConversation(codeMode ? project?.path ?? null : null, mode);
     setConversations((items) => [created, ...items]); setActiveId(created.id); setInput(""); setPreview([]); setDiagnostic(null);
   }
 
@@ -235,10 +247,10 @@ export function ChatPane({ project, openFiles, settings, sidebarOpen, onConfigur
 
   async function compactConversation() {
     if (!conversation || !active || !ready || generating) return;
-    if (conversation.messages.length < 2) { addLocalMessage("No hay suficiente conversación para compactar todavía."); return; }
+    if (conversation.messages.length < 2) { addLocalMessage(t("No hay suficiente conversación para compactar todavía.", "There is not enough conversation to compact yet.")); return; }
     const transcript = conversation.messages.slice(-40).map((item) => `${item.role === "user" ? "Usuario" : "Nova"}:\n${visibleAnswer(item.content)}`).join("\n\n").slice(-120_000);
     let summary = "";
-    setGeneratingConversationId(conversation.id); setGenerating(true); setDiagnostic(null); setStatus("Compactando el contexto…"); setWaitMs(0);
+    setGeneratingConversationId(conversation.id); setGenerating(true); setDiagnostic(null); setStatus(t("Compactando el contexto…", "Compacting context…")); setWaitMs(0);
     const timer = window.setInterval(() => setWaitMs((value) => value + 100), 100);
     try {
       const id = crypto.randomUUID(); requestId.current = id;
@@ -247,20 +259,20 @@ export function ChatPane({ project, openFiles, settings, sidebarOpen, onConfigur
         messages: [
           { role: "system", content: "Resume la conversación para que otro asistente pueda continuar el trabajo. Conserva decisiones, archivos, cambios realizados, errores, tareas pendientes y preferencias. Sé conciso, técnico y responde solo con el resumen." },
           { role: "user", content: transcript },
-        ], attachments: [], uploads: [], workspaceAccess: false, canEdit: false,
+        ], attachments: [], uploads: [], externalFolders: [], workspaceAccess: false, canEdit: false, codeMode: false,
       }, (event) => {
         if (event.type === "status") { setStatus(event.message); setWaitMs(event.elapsedMs); }
         if (event.type === "delta") summary += event.text;
-        if (event.type === "done") { setStatus("Contexto compactado"); setWaitMs(event.elapsedMs); }
+        if (event.type === "done") { setStatus(t("Contexto compactado", "Context compacted")); setWaitMs(event.elapsedMs); }
         if (event.type === "error") setDiagnostic(event.diagnostic);
       });
       if (summary.trim()) {
         updateConversationById(conversation.id, (item) => ({ ...item, compactedContext: summary.trim(), compactedAt: Date.now(), updatedAt: Date.now() }));
-        addLocalMessage("Contexto compactado. Nova conservará los puntos importantes y enviará menos historial en los próximos mensajes.");
+        addLocalMessage(t("Contexto compactado. Nova conservará los puntos importantes y enviará menos historial en los próximos mensajes.", "Context compacted. Nova will keep the important points and send less history in future messages."));
       } else if (!diagnostic) {
         setDiagnostic({ code: "COMPACTION_FAILED", title: "No se pudo compactar el contexto", explanation: "El modelo no devolvió un resumen.", cause: "La respuesta llegó vacía o se interrumpió.", action: "Vuelve a intentarlo más tarde.", technicalDetails: null, retryable: true });
       }
-    } catch (cause) { setDiagnostic(asDiagnostic(cause)); setStatus("No se pudo compactar el contexto"); }
+    } catch (cause) { setDiagnostic(asDiagnostic(cause)); setStatus(t("No se pudo compactar el contexto", "Context could not be compacted")); }
     finally { window.clearInterval(timer); setGenerating(false); setGeneratingConversationId(null); requestId.current = null; }
   }
 
@@ -273,11 +285,16 @@ export function ChatPane({ project, openFiles, settings, sidebarOpen, onConfigur
     }
     if (command === "/compact") {
       setInput("");
-      if (!ready) { addLocalMessage("Configura un proveedor y un modelo antes de compactar el contexto."); return true; }
+      if (!ready) { addLocalMessage(t("Configura un proveedor y un modelo antes de compactar el contexto.", "Configure a provider and model before compacting the context.")); return true; }
       void compactConversation();
       return true;
     }
-    if (["/test", "/build", "/check"].includes(command)) { setInput(""); void requestDetectedCommand(command.slice(1) as DetectedCommand["kind"]); return true; }
+    if (["/test", "/build", "/check"].includes(command)) {
+      setInput("");
+      if (!codeMode) addLocalMessage(t("Cambia a NovaAI Code para ejecutar comandos del proyecto.", "Switch to NovaAI Code to run project commands."));
+      else void requestDetectedCommand(command.slice(1) as DetectedCommand["kind"]);
+      return true;
+    }
     if (command === "/help") { addLocalMessage("Comandos disponibles:\n• /new — nueva conversación\n• /clear — limpiar este chat\n• /compact — resumir historial\n• /test — ejecutar pruebas\n• /build — compilar el proyecto\n• /check — comprobar el código\n• /help — ver esta ayuda"); setInput(""); return true; }
     if (command.startsWith("/")) { addLocalMessage(`No conozco “${command}”. Escribe /help para ver los comandos disponibles.`); setInput(""); return true; }
     return false;
@@ -315,7 +332,7 @@ export function ChatPane({ project, openFiles, settings, sidebarOpen, onConfigur
   function selectAvailableConversation(items: Conversation[], excludedId: string) {
     const available = sortConversations(items.filter((item) => item.id !== excludedId), false);
     if (available.length) { setActiveId(available[0].id); return items; }
-    const created = createConversation(project?.path ?? null);
+    const created = createConversation(codeMode ? project?.path ?? null : null, mode);
     setActiveId(created.id);
     return [created, ...items];
   }
@@ -363,15 +380,21 @@ export function ChatPane({ project, openFiles, settings, sidebarOpen, onConfigur
     const result = descriptions.length === 1
       ? `Listo, ${descriptions[0].charAt(0).toLocaleLowerCase()}${descriptions[0].slice(1)}.`
       : `Listo, he aplicado ${descriptions.length} cambios:\n${descriptions.map((text) => `• ${text}`).join("\n")}`;
-    updateConversationById(conversationId, (item) => ({ ...item, messages: item.messages.map((entry) => entry.id === messageId ? { ...entry, content: result, reasoning: undefined } : entry), updatedAt: Date.now() }));
+    const appliedChanges: AppliedChange[] = actions.map((action) => {
+      const before = action.before ?? "";
+      const after = action.type === "write" ? action.content ?? "" : "";
+      const limit = 24_000;
+      return { type: action.type, path: action.path, newPath: action.newPath, before: before.slice(0, limit), after: after.slice(0, limit), truncated: before.length > limit || after.length > limit };
+    });
+    updateConversationById(conversationId, (item) => ({ ...item, messages: item.messages.map((entry) => entry.id === messageId ? { ...entry, content: result, reasoning: undefined, appliedChanges } : entry), updatedAt: Date.now() }));
   }
 
   async function preparePreview(actions: AiProjectAction[], owner?: { conversationId: string; messageId: string }) {
     if (!project || !actions.length) return;
     const values: PreviewAction[] = [];
-    for (const action of actions.slice(0, 30)) {
+    for (const action of actions.slice(0, 500)) {
       if (action.type === "write" || action.type === "delete") {
-        try { const old = await projectFiles.read(project.path, action.path); values.push({ ...action, before: old.content, isNew: false }); }
+        try { const old = await projectFiles.read(actionRoot(action), action.path); values.push({ ...action, before: old.content, isNew: false }); }
         catch { values.push({ ...action, before: "", isNew: action.type === "write" }); }
       } else values.push(action);
     }
@@ -383,12 +406,21 @@ export function ChatPane({ project, openFiles, settings, sidebarOpen, onConfigur
     if (!project || !actions.length) return { paths: [], actions: [] as PreviewAction[] };
     const described: PreviewAction[] = [];
     for (const action of actions) {
-      if (action.type === "write") {
-        try { await projectFiles.read(project.path, action.path); described.push({ ...action, isNew: false }); }
-        catch { described.push({ ...action, isNew: true }); }
+      if (action.type === "write" || action.type === "delete") {
+        try { const old = await projectFiles.read(actionRoot(action), action.path); described.push({ ...action, before: old.content, isNew: false }); }
+        catch { described.push({ ...action, before: "", isNew: action.type === "write" }); }
       } else described.push(action);
     }
-    const paths = await projectFiles.applyAiActions(project.path, actions);
+    const groups = new Map<string, AiProjectAction[]>();
+    for (const action of actions) {
+      const root = actionRoot(action);
+      groups.set(root, [...(groups.get(root) ?? []), { ...action, rootId: undefined }]);
+    }
+    const paths: string[] = [];
+    for (const [root, group] of groups) {
+      const changed = await projectFiles.applyAiActions(root, group);
+      if (root === project.path) paths.push(...changed);
+    }
     await onFilesChanged(paths);
     return { paths, actions: described };
   }
@@ -432,22 +464,29 @@ export function ChatPane({ project, openFiles, settings, sidebarOpen, onConfigur
     setShowJumpToBottom(false);
     const requestConfig = { ...active };
     const requestProjectPath = project?.path ?? null;
-    const requestAttachments = [...projectAttachments];
+    const requestCodeMode = conversation.assistantMode === "code";
+    const requestAttachments = requestCodeMode ? [...projectAttachments] : [];
     const requestUploads = uploads.map(({ name, mimeType, kind, data }) => ({ name, mimeType, kind, data }));
     const base = editingMessageId ? conversation.messages.slice(0, conversation.messages.findIndex((item) => item.id === editingMessageId)) : conversation.messages;
     const uploadedMeta = uploads.map(({ data: _data, ...item }) => item);
     const requestHasImages = requestUploads.some((item) => item.kind === "image");
-    const userMessage = message("user", prompt, uploadedMeta);
+    const useWorkspace = requestCodeMode && !!project && !isSimpleGreeting(prompt);
+    const userMessage = message("user", prompt, uploadedMeta, []);
     const assistantMessage = message("assistant", "");
     const conversationId = conversation.id;
-    const useWorkspace = !!project && !isSimpleGreeting(prompt);
-    const actionExpected = useWorkspace && requestsProjectAction(prompt, base);
+    const actionExpected = requestCodeMode && useWorkspace && requestsProjectAction(prompt, base);
     const recentBase = requestHistory(base);
     const history = [...recentBase, userMessage];
     const nextMessages = [...history, assistantMessage];
     const title = conversation.messages.length === 0 && !conversation.customTitle ? (prompt.replace(/\s+/g, " ").slice(0, 46) || "Imagen adjunta") : conversation.title;
     updateConversationById(conversationId, (item) => ({ ...item, title, messages: nextMessages, lastError: false, updatedAt: Date.now() }));
-    setInput(""); setEditingMessageId(null); setDiagnostic(null); setPreview([]); setGeneratingConversationId(conversationId); setGenerating(true); setStatus("Preparando solicitud…"); setWaitMs(0); lastPrompt.current = prompt; assistantBuffer.current = "";
+    if (useWorkspace && project) {
+      // References are informational and must not delay the provider request.
+      void projectFiles.contextPreview(project.path, prompt).then((references) => {
+        updateConversationById(conversationId, (item) => ({ ...item, messages: item.messages.map((entry) => entry.id === userMessage.id ? { ...entry, contextReferences: references } : entry) }));
+      }).catch(() => undefined);
+    }
+    setInput(""); setEditingMessageId(null); setDiagnostic(null); setPreview([]); setGeneratingConversationId(conversationId); setGenerating(true); setStatus(t("Preparando solicitud…", "Preparing request…")); setWaitMs(0); lastPrompt.current = prompt; assistantBuffer.current = "";
     const timer = window.setInterval(() => setWaitMs((value) => value + 100), 100);
     let interrupted = false;
     let actionStreamComplete = false;
@@ -460,31 +499,29 @@ export function ChatPane({ project, openFiles, settings, sidebarOpen, onConfigur
       if (!actions.length) return;
       streamedActions = actions;
       actionStreamComplete = true;
-      setStatus(conversation.approvalMode === "ask" ? "Preparando cambios para revisar…" : "Creando archivos…");
+      setStatus(conversation.approvalMode === "ask" ? t("Preparando cambios para revisar…", "Preparing changes for review…") : t("Creando archivos…", "Creating files…"));
       streamedActionPromise = handleProposedActions(actions, conversation.approvalMode, { conversationId, messageId: assistantMessage.id });
-      // The complete operation is already available. Stop any trailing explanation
-      // so the user does not wait for duplicate tokens before the file is created.
-      const activeRequestId = requestId.current;
-      if (activeRequestId) void ai.cancel(activeRequestId).catch(() => undefined);
+      // Keep receiving the stream. Nova must never cancel a response on its own
+      // merely because it has received a valid operation block.
     };
 
     const receive = (event: import("../types").AiChatEvent) => {
       if (event.type === "status") { setStatus(event.message); setWaitMs(event.elapsedMs); }
-      if (event.type === "reasoning") setStatus("Generando respuesta…");
+      if (event.type === "reasoning") setStatus(t("Generando respuesta…", "Generating response…"));
       if (event.type === "delta") {
         assistantBuffer.current += event.text;
         if (!streamedActionPromise) updateConversationById(conversationId, (item) => ({ ...item, messages: item.messages.map((entry) => entry.id === assistantMessage.id ? { ...entry, content: entry.content + event.text } : entry), updatedAt: Date.now() }));
         applyCompletedActionStream();
       }
-      if (event.type === "done") { setStatus(`Completado en ${(event.elapsedMs / 1000).toFixed(1)} s`); setWaitMs(event.elapsedMs); }
+      if (event.type === "done") { setStatus(`${t("Completado en", "Completed in")} ${(event.elapsedMs / 1000).toFixed(1)} s`); setWaitMs(event.elapsedMs); }
       if (event.type === "cancelled") {
         interrupted = true;
         if (actionStreamComplete) {
-          setStatus(conversation.approvalMode === "ask" ? "Operaciones listas para revisar" : "Aplicando cambios…");
+          setStatus(conversation.approvalMode === "ask" ? t("Operaciones listas para revisar", "Operations ready to review") : t("Aplicando cambios…", "Applying changes…"));
         } else if (requestId.current && userStoppedRequests.current.has(requestId.current)) {
-          setStatus("Generación detenida");
+          setStatus(t("Generación detenida", "Generation stopped"));
         } else {
-          setStatus("La conexión se interrumpió");
+          setStatus(t("La conexión se interrumpió", "The connection was interrupted"));
           setDiagnostic({ code: "CONNECTION_LOST", title: "La respuesta se interrumpió", explanation: "El proveedor cerró la generación sin que pulsaras Detener.", cause: "La conexión con el proveedor se perdió o terminó de forma inesperada.", action: "La pregunta se conserva. Pulsa Reintentar para continuar.", technicalDetails: null, retryable: true });
         }
       }
@@ -508,7 +545,10 @@ export function ChatPane({ project, openFiles, settings, sidebarOpen, onConfigur
         requestId: id, projectPath: requestProjectPath, config: requestConfig,
         messages: requestMessages, attachments: requestAttachments,
         uploads: requestUploads,
-        workspaceAccess: useWorkspace, canEdit: actionExpected,
+        externalFolders: requestCodeMode ? conversation.externalFolders : [],
+        // Capability stays enabled throughout NovaAI Code. actionExpected is
+        // the separate safety gate for reviewing/applying this message's edits.
+        workspaceAccess: useWorkspace, canEdit: requestCodeMode, codeMode: requestCodeMode,
       }, receive);
     };
     try {
@@ -538,7 +578,7 @@ export function ChatPane({ project, openFiles, settings, sidebarOpen, onConfigur
         actions = proposedActions(assistantBuffer.current);
         if (!actions.length) actions = codeBlockAction(assistantBuffer.current, prompt);
       }
-      if (actionExpected && actions.length) {
+      if (actions.length) {
         if (streamedActionPromise) await streamedActionPromise;
         else await handleProposedActions(actions, conversation.approvalMode, { conversationId, messageId: assistantMessage.id });
       }
@@ -560,11 +600,38 @@ export function ChatPane({ project, openFiles, settings, sidebarOpen, onConfigur
     const id = requestId.current;
     if (!id) return;
     userStoppedRequests.current.add(id);
-    setStatus("Deteniendo generación…");
+    setStatus(t("Deteniendo generación…", "Stopping generation…"));
     try { await ai.cancel(id); }
     catch (error) { userStoppedRequests.current.delete(id); setDiagnostic(asDiagnostic(errorMessage(error))); }
   }
   function toggleProjectAttachment(path: string) { setProjectAttachments((items) => items.includes(path) ? items.filter((item) => item !== path) : [...items, path]); }
+
+  async function grantExternalFolder(access: ExternalFolderGrant["access"]) {
+    try {
+      const path = await chooseExternalFolder();
+      if (!path) return;
+      const name = path.replace(/[\\/]+$/, "").split(/[\\/]/).pop() || path;
+      updateConversation((item) => {
+        const existing = item.externalFolders.find((folder) => folder.path.toLocaleLowerCase() === path.toLocaleLowerCase());
+        const folder: ExternalFolderGrant = existing ? { ...existing, access } : { id: crypto.randomUUID(), path, name, access };
+        return { ...item, externalFolders: [...item.externalFolders.filter((entry) => entry.id !== folder.id), folder], updatedAt: Date.now() };
+      });
+      setAttachmentOpen(false);
+    } catch (cause) { setDiagnostic(asDiagnostic(errorMessage(cause))); }
+  }
+
+  function revokeExternalFolder(id: string) {
+    updateConversation((item) => ({ ...item, externalFolders: item.externalFolders.filter((folder) => folder.id !== id), updatedAt: Date.now() }));
+  }
+
+  function actionRoot(action: AiProjectAction) {
+    if (!project) throw new Error("No hay un proyecto abierto.");
+    if (!action.rootId) return project.path;
+    const folder = conversation?.externalFolders.find((entry) => entry.id === action.rootId);
+    if (!folder) throw new Error("La carpeta adicional ya no tiene permiso.");
+    if (folder.access !== "write") throw new Error(`La carpeta ${folder.name} solo tiene permiso de lectura.`);
+    return folder.path;
+  }
 
   async function uploadFiles() {
     try {
@@ -632,38 +699,64 @@ export function ChatPane({ project, openFiles, settings, sidebarOpen, onConfigur
   }
 
   return <section className="chat-layout">
-    <ConversationSidebar open={sidebarOpen} projectName={project?.name ?? "Sin proyecto"} projectPath={project?.path ?? null} conversations={conversations} activeId={activeId} generatingConversationId={generatingConversationId} persistenceError={persistenceError} onSelect={setActiveId} onNew={newConversation} onAction={manageConversation} isBusy={(item) => isConversationBusy(item, generatingConversationId)} />
+    <ConversationSidebar mode={mode} interactive={activeWorkspace} open={sidebarOpen} projectName={project?.name ?? t("Sin proyecto", "No project")} projectPath={project?.path ?? null} projects={projects} conversations={conversations} activeId={activeId} generatingConversationId={generatingConversationId} persistenceError={persistenceError} onAddProject={onAddProject} onSelectProject={onSelectProject} onSelect={setActiveId} onNew={newConversation} onAction={manageConversation} isBusy={(item) => isConversationBusy(item, generatingConversationId)} />
     <section className="chat-pane">
       <header className="chat-header">
-        <div className="chat-provider"><span className={`provider-dot ${ready ? "is-ready" : ""}`} /><div><strong>{active ? providerMeta[active.provider].name : "Sin proveedor"}</strong><span>{active?.model || "Configura un modelo"}</span></div></div>
+        <div className="chat-header__identity">
+          {conversation && <div className={`assistant-mode-picker${modePickerOpen ? " is-open" : ""}`} ref={modePickerRef}>
+            <button className="assistant-mode-trigger" type="button" onClick={() => setModePickerOpen((open) => !open)} disabled={modeSwitchDisabled} aria-haspopup="menu" aria-expanded={modePickerOpen} aria-label={t("Elegir modo del asistente", "Choose assistant mode")}>
+              <span className={`assistant-mode-icon assistant-mode-icon--${codeMode ? "code" : "chat"}`}>{codeMode ? <Code2 size={15} /> : <Bot size={15} />}</span>
+              <span><strong>{codeMode ? "NovaAI Code" : "NovaAI"}</strong><small>{codeMode ? t("Agente de código", "Coding agent") : t("Chat con IA", "AI chat")}</small></span>
+              <ChevronDown size={14} />
+            </button>
+            {modePickerOpen && <div className="assistant-mode-menu" role="menu" aria-label={t("Elegir modo", "Choose mode")}>
+              <header><strong>{t("Elige cómo quieres trabajar", "Choose how you want to work")}</strong><span>{t("Puedes usar un modo diferente en cada chat.", "You can use a different mode in each chat.")}</span></header>
+              <button type="button" role="menuitemradio" aria-checked={!codeMode} className={!codeMode ? "is-selected" : ""} onClick={() => changeAssistantMode("chat")}>
+                <span className="assistant-mode-card-icon assistant-mode-card-icon--chat"><Bot size={19} /></span>
+                <span><strong>NovaAI</strong><small>{t("Pregunta, aprende y genera contenido sin modificar archivos.", "Ask, learn, and generate content without changing files.")}</small></span>
+                {!codeMode && <Check size={16} />}
+              </button>
+              <button type="button" role="menuitemradio" aria-checked={codeMode} className={codeMode ? "is-selected" : ""} onClick={() => changeAssistantMode("code")} disabled={!project}>
+                <span className="assistant-mode-card-icon assistant-mode-card-icon--code"><Code2 size={19} /></span>
+                <span><strong>NovaAI Code</strong><small>{project ? t("Lee, crea y edita archivos dentro del proyecto abierto.", "Read, create, and edit files inside the open project.") : t("Abre un proyecto para activar el agente de código.", "Open a project to enable the coding agent.")}</small></span>
+                {codeMode && <Check size={16} />}
+              </button>
+              <footer><ShieldCheck size={13} /><span>{codeMode ? t("Los cambios respetan tus permisos y muestran un diff.", "Changes follow your permissions and show a diff.") : t("NovaAI no recibe acceso automático al proyecto.", "NovaAI does not receive automatic project access.")}</span></footer>
+            </div>}
+          </div>}
+          <div className="chat-provider"><span className={`provider-dot ${ready ? "is-ready" : ""}`} /><div><strong>{active ? providerMeta[active.provider].name : t("Sin proveedor", "No provider")}</strong><span>{active?.model || t("Configura un modelo", "Configure a model")}</span></div></div>
+        </div>
         <div className="chat-header__actions">
-          {project && conversation && <label className={`approval-control approval-control--${conversation.approvalMode}`} title={t("Controla cuándo Nova necesita tu aprobación", "Controls when Nova needs your approval")}><ShieldCheck size={14} /><select value={conversation.approvalMode} onChange={(event) => updateConversation((item) => ({ ...item, approvalMode: event.target.value as Conversation["approvalMode"], updatedAt: Date.now() }))} aria-label={t("Permisos de la conversación", "Conversation permissions")}><option value="ask">{t("Solicitar aprobación", "Ask for approval")}</option><option value="auto">{t("Aprobar por mí", "Approve for me")}</option><option value="full">{t("Acceso completo", "Full access")}</option></select></label>}
+          {codeMode && project && conversation && <label className={`approval-control approval-control--${conversation.approvalMode}`} title={t("Controla cuándo Nova necesita tu aprobación", "Controls when Nova needs your approval")}><ShieldCheck size={14} /><select value={conversation.approvalMode} onChange={(event) => updateConversation((item) => ({ ...item, approvalMode: event.target.value as Conversation["approvalMode"], updatedAt: Date.now() }))} aria-label={t("Permisos de la conversación", "Conversation permissions")}><option value="ask">{t("Solicitar aprobación", "Ask for approval")}</option><option value="auto">{t("Aprobar por mí", "Approve for me")}</option><option value="full">{t("Acceso completo", "Full access")}</option></select></label>}
           <div className="chat-connection">{ready ? <><Check size={13} />{t("Configurado", "Configured")}</> : <><AlertCircle size={13} />{t("Incompleto", "Incomplete")}</>}<button className="icon-button" onClick={onConfigure} title={t("Configurar proveedores", "Configure providers")}><Settings2 size={16} /></button></div>
         </div>
       </header>
       <div className="chat-messages" ref={messagesRef} onScroll={handleMessagesScroll}>
-        {!conversation?.messages.length && <div className="chat-empty"><div><MessageSquarePlus size={20} /></div><h1>{t("¿Qué quieres construir?", "What do you want to build?")}</h1><p>{project ? t(`Nova tiene acceso a ${project.name}.`, `Nova has access to ${project.name}.`) : t("Abre una carpeta para trabajar con su código.", "Open a folder to work with its code.")}</p>{!ready && <button className="primary-button" onClick={onConfigure}><Settings2 size={15} />{t("Configurar proveedor", "Configure provider")}</button>}</div>}
+        {!conversation?.messages.length && <div className={`chat-empty chat-empty--${mode}`}><div>{codeMode ? <Code2 size={20} /> : <Bot size={20} />}</div><h1>{codeMode ? t("¿Qué quieres construir?", "What do you want to build?") : t("¿En qué puedo ayudarte hoy?", "How can I help today?")}</h1><p>{codeMode ? (project ? t(`NovaAI Code puede trabajar en ${project.name}.`, `NovaAI Code can work in ${project.name}.`) : t("Abre una carpeta para trabajar con su código.", "Open a folder to work with its code.")) : t("Pregunta, analiza una imagen o desarrolla una idea.", "Ask a question, analyze an image, or develop an idea.")}</p>{!codeMode && <div className="chat-starters"><button onClick={() => setInput(t("Ayúdame a entender un tema", "Help me understand a topic"))}>{t("Aprender algo", "Learn something")}</button><button onClick={() => setInput(t("Analiza esta idea y ayúdame a mejorarla", "Analyze this idea and help me improve it"))}>{t("Desarrollar una idea", "Develop an idea")}</button><button onClick={() => setAttachmentOpen(true)}>{t("Analizar un archivo", "Analyze a file")}</button></div>}{!ready && <button className="primary-button" onClick={onConfigure}><Settings2 size={15} />{t("Configurar proveedor", "Configure provider")}</button>}</div>}
         {conversation?.messages.map((item, index) => <article key={item.id} className={`chat-message chat-message--${item.role}`}>
-          <span>{item.role === "user" ? "Tú" : "Nova"}</span>
+          <span>{item.role === "user" ? t("Tú", "You") : codeMode ? "NovaAI Code" : "NovaAI"}</span>
           <div className="message-body">
-            <div>{item.role === "assistant" ? <AssistantMessageContent content={visibleAnswer(item.content)} /> : item.content}{!(item.role === "assistant" ? visibleAnswer(item.content) : item.content) && generatingHere && index === conversation.messages.length - 1 ? <span className="waiting-text"><LoaderCircle className="spin" size={14} />{status} {(waitMs / 1000).toFixed(1)} s</span> : null}</div>
+            <div>{item.role === "assistant" ? <AssistantMessageContent content={visibleAnswer(item.content)} /> : item.content}{!(item.role === "assistant" ? visibleAnswer(item.content) : item.content) && generatingHere && index === conversation.messages.length - 1 ? <span className="waiting-text" role="status" aria-live="polite"><LoaderCircle className="spin" size={14} />{status} {(waitMs / 1000).toFixed(1)} s</span> : null}</div>
             {!!item.uploads?.length && <div className="message-attachments">{item.uploads.map((file) => <span key={file.id}>{file.kind === "image" ? <Image size={12} /> : <FileCode2 size={12} />}{file.name}</span>)}</div>}
+            {!!item.contextReferences?.length && <details className="message-context"><summary><FileCode2 size={12} />{item.contextReferences.length} {t("archivos usados como contexto", "files used as context")}</summary><div>{item.contextReferences.map((reference) => <button key={reference.path} type="button" title={reference.path}>{reference.path}:{reference.startLine}-{reference.endLine}{reference.truncated ? ` ${t("(truncado)", "(truncated)")}` : ""}</button>)}</div></details>}
+            {!!item.appliedChanges?.length && <details className="message-final-diff"><summary><Check size={12} />{t("Ver diff final", "View final diff")} · {item.appliedChanges.length}</summary><div>{item.appliedChanges.map((change, changeIndex) => <article key={`${change.type}-${change.path}-${changeIndex}`}><strong>{change.path}{change.newPath ? ` → ${change.newPath}` : ""}</strong>{change.type === "write" ? <div className="final-diff-columns"><pre>{change.before || t("Archivo nuevo", "New file")}</pre><pre>{change.after}</pre></div> : <span>{change.type === "mkdir" ? t("Carpeta creada", "Folder created") : change.type === "rename" ? t("Elemento renombrado", "Item renamed") : t("Elemento eliminado", "Item deleted")}</span>}{change.truncated && <small>{t("Diff truncado para proteger el historial local", "Diff truncated to protect local history")}</small>}</article>)}</div></details>}
             {(item.role === "user" ? item.content : visibleAnswer(item.content)) && <div className="message-actions"><button onClick={() => navigator.clipboard.writeText(item.role === "assistant" ? visibleAnswer(item.content) : item.content)} title={t("Copiar", "Copy")}><Clipboard size={13} /></button>{item.role === "user" && !generatingHere && <button onClick={() => editQuestion(item)} title={t("Editar pregunta", "Edit question")}><Edit3 size={13} /></button>}</div>}
           </div>
         </article>)}
-        {conversation?.agentTask && <AgentTaskCard task={conversation.agentTask} pending={pendingCommand?.conversationId === conversation.id ? pendingCommand.command : null} busy={commandBusy} onApprove={pendingCommand?.conversationId === conversation.id ? () => void executeDetectedCommand(pendingCommand.command) : undefined} onApproveTask={pendingCommand?.conversationId === conversation.id ? () => void executeDetectedCommand(pendingCommand.command, true) : undefined} onReject={() => { setPendingCommand(null); updateConversation((item) => item.agentTask ? { ...item, agentTask: { ...item.agentTask, state: "cancelled", updatedAt: Date.now() }, updatedAt: Date.now() } : item); }} onStop={() => void stopAgentCommand()} />}
+        {conversation?.agentTask && <AgentTaskCard task={conversation.agentTask} pending={pendingCommand?.conversationId === conversation.id ? pendingCommand.command : null} busy={commandBusy} onApprove={pendingCommand?.conversationId === conversation.id ? () => void executeDetectedCommand(pendingCommand.command) : undefined} onApproveTask={pendingCommand?.conversationId === conversation.id ? () => void executeDetectedCommand(pendingCommand.command, true) : undefined} onReject={() => { setPendingCommand(null); updateConversation((item) => item.agentTask ? { ...item, agentTask: { ...item.agentTask, state: "cancelled", updatedAt: Date.now() }, updatedAt: Date.now() } : item); }} onStop={() => void stopAgentCommand()} onResume={conversation.agentTask.state === "interrupted" ? () => { const latest = [...conversation.messages].reverse().find((item) => item.role === "user")?.content; if (latest) void send(latest); } : undefined} />}
         {diagnostic && <DiagnosticCard diagnostic={diagnostic} onRetry={() => void send(lastPrompt.current)} />}
       </div>
       {showJumpToBottom && <button type="button" className="jump-to-bottom" onClick={() => scrollToBottom()} title={t("Ir al final", "Jump to bottom")} aria-label={t("Ir al final del chat", "Jump to the bottom of the chat")}><ChevronDown size={17} /></button>}
       <div className="chat-composer-wrap">
         {editingMessageId && <div className="editing-banner"><Edit3 size={12} />{t("Editando pregunta", "Editing question")}<button onClick={() => { setEditingMessageId(null); setInput(""); }}><X size={12} /></button></div>}
-        {(projectAttachments.length > 0 || uploads.length > 0) && <div className="attached-files">{projectAttachments.map((path) => <span key={path}><FileCode2 size={12} />{path}<button onClick={() => toggleProjectAttachment(path)}><X size={12} /></button></span>)}{uploads.map((file) => <span key={file.id} title={file.name}>{file.kind === "image" ? <img className="attached-files__image" src={`data:${file.mimeType};base64,${file.data}`} alt="Imagen adjunta" /> : <FileCode2 size={12} />}{file.name}<button onClick={() => setUploads((items) => items.filter((item) => item.id !== file.id))} aria-label={`Quitar ${file.name}`}><X size={12} /></button></span>)}</div>}
-        {attachmentOpen && <div className={`attachment-menu${openFiles.length ? "" : " attachment-menu--compact"}`}><button className="attachment-menu__upload" onClick={() => void uploadFiles()}><Upload size={14} />{t("Subir archivo o imagen", "Upload file or image")}</button>{openFiles.length > 0 && <div className="attachment-menu__files">{openFiles.map((file) => <label key={file.relativePath}><input type="checkbox" checked={projectAttachments.includes(file.relativePath)} onChange={() => toggleProjectAttachment(file.relativePath)} /><FileCode2 size={14} /><span>{file.relativePath}</span><small>{Math.ceil(file.content.length / 4).toLocaleString()} tokens</small></label>)}</div>}</div>}
-        {!!commandSuggestions.length && <div className="slash-command-menu" role="listbox" aria-label="Comandos del chat">{commandSuggestions.map((item) => <button type="button" key={item.command} onClick={() => { setInput(""); runCommand(item.command); }}><code>{item.command}</code><span><strong>{item.label}</strong><small>{item.description}</small></span></button>)}</div>}
-        <div className="chat-composer"><textarea value={input} onChange={(event) => setInput(event.target.value)} onPaste={handlePaste} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void send(); } }} placeholder={ready ? t("Pide un cambio o pregunta sobre el proyecto…", "Ask for a change or about the project…") : t("Selecciona un modelo para comenzar", "Select a model to begin")} disabled={!ready || generatingHere} rows={2} /><footer><div><button className="composer-button composer-button--attach" disabled={generatingHere} onClick={() => setAttachmentOpen((value) => !value)} aria-expanded={attachmentOpen} title={t("Adjuntar archivo o imagen", "Attach file or image")} aria-label={t("Adjuntar archivo o imagen", "Attach file or image")}><Plus size={16} /></button><span>{estimatedTokens.toLocaleString()} {t("tokens aprox.", "approx. tokens")}</span></div><div className="composer-actions">{project && conversation && <label className={`approval-control approval-control--${conversation.approvalMode}`} title={t("Controla cuándo Nova necesita tu aprobación", "Controls when Nova needs your approval")}><ShieldCheck size={14} /><select value={conversation.approvalMode} onChange={(event) => updateConversation((item) => ({ ...item, approvalMode: event.target.value as Conversation["approvalMode"], updatedAt: Date.now() }))} aria-label={t("Permisos de la conversación", "Conversation permissions")}><option value="ask">{t("Solicitar aprobación", "Ask for approval")}</option><option value="auto">{t("Aprobar por mí", "Approve for me")}</option><option value="full">{t("Acceso completo", "Full access")}</option></select></label>}{settings && <ChatModelPicker projectPath={project?.path ?? null} settings={settings} disabled={generatingHere} onChange={onSettingsChange} onConfigure={onConfigure} />}{generatingHere ? <button className="stop-button" onClick={() => void stop()}><Square size={13} fill="currentColor" />{t("Detener", "Stop")}</button> : <button className="send-button" disabled={!ready || (!input.trim() && uploads.length === 0 && projectAttachments.length === 0)} onClick={() => void send()} aria-label={t("Enviar", "Send")}><Send size={16} /></button>}</div></footer></div>
+        {codeMode && conversation?.externalFolders.length ? <div className="attached-files external-folder-grants">{conversation.externalFolders.map((folder) => <span key={folder.id} title={folder.path}><FolderPlus size={12} />{folder.name} · {folder.access === "write" ? t("editar", "edit") : t("lectura", "read")}<button onClick={() => revokeExternalFolder(folder.id)} aria-label={`${t("Quitar", "Remove")} ${folder.name}`}><X size={12} /></button></span>)}</div> : null}
+        {(projectAttachments.length > 0 || uploads.length > 0) && <div className="attached-files">{projectAttachments.map((path) => <span key={path}><FileCode2 size={12} />{path}<button onClick={() => toggleProjectAttachment(path)}><X size={12} /></button></span>)}{uploads.map((file) => <span key={file.id} title={file.name}>{file.kind === "image" ? <img className="attached-files__image" src={`data:${file.mimeType};base64,${file.data}`} alt={t("Imagen adjunta", "Attached image")} /> : <FileCode2 size={12} />}{file.name}<button onClick={() => setUploads((items) => items.filter((item) => item.id !== file.id))} aria-label={`${t("Quitar", "Remove")} ${file.name}`}><X size={12} /></button></span>)}</div>}
+        {attachmentOpen && <div className={`attachment-menu${codeMode && openFiles.length ? "" : " attachment-menu--compact"}`}><button className="attachment-menu__upload" onClick={() => void uploadFiles()}><Upload size={14} />{t("Subir archivo o imagen", "Upload file or image")}</button>{codeMode && project && <div className="external-folder-actions"><button type="button" onClick={() => void grantExternalFolder("read")}><FolderPlus size={14} />{t("Añadir carpeta de lectura", "Add read-only folder")}</button><button type="button" onClick={() => void grantExternalFolder("write")}><FolderPlus size={14} />{t("Añadir carpeta con edición", "Add editable folder")}</button></div>}{codeMode && openFiles.length > 0 && <div className="attachment-menu__files">{openFiles.map((file) => <label key={file.relativePath}><input type="checkbox" checked={projectAttachments.includes(file.relativePath)} onChange={() => toggleProjectAttachment(file.relativePath)} /><FileCode2 size={14} /><span>{file.relativePath}</span><small>{Math.ceil(file.content.length / 4).toLocaleString()} tokens</small></label>)}</div>}</div>}
+        {!!commandSuggestions.length && <div className="slash-command-menu" role="listbox" aria-label={t("Comandos del chat", "Chat commands")}>{commandSuggestions.map((item) => <button type="button" key={item.command} onClick={() => { setInput(""); runCommand(item.command); }}><code>{item.command}</code><span><strong>{t(item.label[0], item.label[1])}</strong><small>{t(item.description[0], item.description[1])}</small></span></button>)}</div>}
+        <div className="chat-composer"><textarea value={input} onChange={(event) => setInput(event.target.value)} onPaste={handlePaste} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void send(); } }} placeholder={ready ? (codeMode ? t("Pide un cambio o pregunta sobre el proyecto…", "Ask for a change or about the project…") : t("Pregunta lo que quieras…", "Ask anything…")) : t("Selecciona un modelo para comenzar", "Select a model to begin")} disabled={!ready || generatingHere} rows={2} /><footer><div><button className="composer-button composer-button--attach" disabled={generatingHere} onClick={() => setAttachmentOpen((value) => !value)} aria-expanded={attachmentOpen} title={t("Adjuntar archivo o imagen", "Attach file or image")} aria-label={t("Adjuntar archivo o imagen", "Attach file or image")}><Plus size={16} /></button><span>{estimatedTokens.toLocaleString()} {t("tokens aprox.", "approx. tokens")}</span></div><div className="composer-actions">{codeMode && project && conversation && <label className={`approval-control approval-control--${conversation.approvalMode}`} title={t("Controla cuándo Nova necesita tu aprobación", "Controls when Nova needs your approval")}><ShieldCheck size={14} /><select value={conversation.approvalMode} onChange={(event) => updateConversation((item) => ({ ...item, approvalMode: event.target.value as Conversation["approvalMode"], updatedAt: Date.now() }))} aria-label={t("Permisos de la conversación", "Conversation permissions")}><option value="ask">{t("Solicitar aprobación", "Ask for approval")}</option><option value="auto">{t("Aprobar por mí", "Approve for me")}</option><option value="full">{t("Acceso completo", "Full access")}</option></select></label>}{settings && <ChatModelPicker projectPath={project?.path ?? null} settings={settings} disabled={generatingHere} onChange={onSettingsChange} onConfigure={onConfigure} />}{generatingHere ? <button className="stop-button" onClick={() => void stop()}><Square size={13} fill="currentColor" />{t("Detener", "Stop")}</button> : <button className="send-button" disabled={!ready || (!input.trim() && uploads.length === 0 && projectAttachments.length === 0)} onClick={() => void send()} aria-label={t("Enviar", "Send")}><Send size={16} /></button>}</div></footer></div>
       </div>
     </section>
-    {!!preview.length && <div className="change-overlay" role="dialog" aria-modal="true" aria-label="Revisar operaciones"><section className="change-review"><header><div><strong>Revisar operaciones</strong><span>Una sola aprobación para {preview.length}</span></div><button className="icon-button" onClick={() => setPreview([])}><X size={16} /></button></header><div className="change-list">{preview.map((action, index) => <article key={`${action.type}-${action.path}-${index}`}><h3>{action.path}<span>{action.type === "mkdir" ? "Crear carpeta" : action.type === "rename" ? `Renombrar → ${action.newPath}` : action.type === "delete" ? "Eliminar" : action.isNew ? "Crear archivo" : "Editar archivo"}</span></h3>{action.type === "write" ? <div className="diff-columns"><section><strong>Antes</strong><pre>{action.isNew ? "Archivo nuevo" : action.before}</pre></section><section><strong>Después</strong><pre>{action.content}</pre></section></div> : <div className={`operation-summary operation-summary--${action.type}`}>{action.type === "mkdir" ? "Se creará esta carpeta dentro del proyecto." : action.type === "rename" ? `Se moverá a ${action.newPath}.` : "Se eliminará este elemento del proyecto."}</div>}</article>)}</div><footer><button className="secondary-button" onClick={() => setPreview([])} disabled={applying}>Rechazar todo</button><button className="primary-button" onClick={() => void applyPreview()} disabled={applying}>{applying ? "Aplicando…" : "Aprobar todo"}</button></footer></section></div>}
-    {clearRequestedId && conversations.find((item) => item.id === clearRequestedId) && <ConversationDialog kind="clear" conversation={conversations.find((item) => item.id === clearRequestedId)!} projectName={project?.name ?? "Sin proyecto"} busy={isConversationBusy(conversations.find((item) => item.id === clearRequestedId)!, generatingConversationId)} onClose={() => setClearRequestedId(null)} onConfirm={() => { manageConversation(clearRequestedId, "clear"); setClearRequestedId(null); setInput(""); setDiagnostic(null); setPreview([]); }} />}
+    {!!preview.length && <div className="change-overlay" role="dialog" aria-modal="true" aria-label={t("Revisar operaciones", "Review operations")}><section className="change-review"><header><div><strong>{t("Revisar operaciones", "Review operations")}</strong><span>{t("Una sola aprobación para", "One approval for")} {preview.length}</span></div><button className="icon-button" onClick={() => setPreview([])} aria-label={t("Cerrar", "Close")}><X size={16} /></button></header><div className="change-list">{preview.map((action, index) => <article key={`${action.type}-${action.path}-${index}`}><h3>{action.path}<span>{action.type === "mkdir" ? t("Crear carpeta", "Create folder") : action.type === "rename" ? `${t("Renombrar", "Rename")} → ${action.newPath}` : action.type === "delete" ? t("Eliminar", "Delete") : action.isNew ? t("Crear archivo", "Create file") : t("Editar archivo", "Edit file")}</span></h3>{action.type === "write" ? <div className="diff-columns"><section><strong>{t("Antes", "Before")}</strong><pre>{action.isNew ? t("Archivo nuevo", "New file") : action.before}</pre></section><section><strong>{t("Después", "After")}</strong><pre>{action.content}</pre></section></div> : <div className={`operation-summary operation-summary--${action.type}`}>{action.type === "mkdir" ? t("Se creará esta carpeta dentro del proyecto.", "This folder will be created inside the project.") : action.type === "rename" ? `${t("Se moverá a", "It will be moved to")} ${action.newPath}.` : t("Se eliminará este elemento del proyecto.", "This project item will be deleted.")}</div>}</article>)}</div><footer><button className="secondary-button" onClick={() => setPreview([])} disabled={applying}>{t("Rechazar todo", "Reject all")}</button><button className="primary-button" onClick={() => void applyPreview()} disabled={applying}>{applying ? t("Aplicando…", "Applying…") : t("Aprobar todo", "Approve all")}</button></footer></section></div>}
+    {clearRequestedId && conversations.find((item) => item.id === clearRequestedId) && <ConversationDialog kind="clear" conversation={conversations.find((item) => item.id === clearRequestedId)!} projectName={project?.name ?? t("Sin proyecto", "No project")} busy={isConversationBusy(conversations.find((item) => item.id === clearRequestedId)!, generatingConversationId)} onClose={() => setClearRequestedId(null)} onConfirm={() => { manageConversation(clearRequestedId, "clear"); setClearRequestedId(null); setInput(""); setDiagnostic(null); setPreview([]); }} />}
   </section>;
 }

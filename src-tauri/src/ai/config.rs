@@ -67,6 +67,7 @@ fn merge_defaults(settings: &mut AiSettings) {
         ProviderId::Gemini,
         ProviderId::Nvidia,
         ProviderId::Zai,
+        ProviderId::Kimi,
         ProviderId::Custom,
     ] {
         if let Some(item) = settings

@@ -13,3 +13,4 @@ Official sources:
 - Google Gemini: `https://gemini.google.com/` official favicon
 - NVIDIA: `https://www.nvidia.com/en-us/about-nvidia/legal-info/logo-brand-usage/`
 - Z.AI: `https://z.ai/` official logo
+- Kimi: `https://platform.kimi.ai/` official wordmark

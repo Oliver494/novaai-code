@@ -11,6 +11,13 @@ node_modules
 dist
 dist-ssr
 *.local
+.env
+.env.*
+!.env.example
+*.pem
+*.p12
+*.pfx
+*.key
 
 # Editor directories and files
 .vscode/*
@@ -25,3 +32,4 @@ dist-ssr
 
 # NovaAI Code native build output
 src-tauri/target/
+release-artifacts/

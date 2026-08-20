@@ -2,12 +2,14 @@ import { Archive, Clipboard, Copy, FileText, MoreHorizontal, Pencil, Pin, PinOff
 import { useEffect, useRef } from "react";
 import { createPortal } from "react-dom";
 import type { Conversation } from "../types";
+import { usePreferences } from "../services/preferences";
 
 export type ConversationMenuAction = "pin" | "rename" | "archive" | "restore" | "duplicate" | "markdown" | "copy-id" | "clear" | "delete";
 
 type Props = { conversation: Conversation; open: boolean; onOpen: () => void; onClose: () => void; onAction: (action: ConversationMenuAction) => void };
 
 export function ConversationMenu({ conversation, open, onOpen, onClose, onAction }: Props) {
+  const { t } = usePreferences();
   const root = useRef<HTMLDivElement>(null);
   const trigger = useRef<HTMLButtonElement>(null);
   const menu = useRef<HTMLDivElement>(null);
@@ -29,23 +31,23 @@ export function ConversationMenu({ conversation, open, onOpen, onClose, onAction
     top: rect.bottom + 294 < window.innerHeight ? rect.bottom + 4 : Math.max(8, rect.top - 294),
   } : undefined;
   return <div className="conversation-menu-wrap" ref={root}>
-    <button ref={trigger} className="conversation-more" onClick={(event) => { event.stopPropagation(); open ? onClose() : onOpen(); }} title="Más acciones" aria-label={`Acciones de ${conversation.title}`} aria-expanded={open}><MoreHorizontal size={15} /></button>
+    <button ref={trigger} className="conversation-more" onClick={(event) => { event.stopPropagation(); open ? onClose() : onOpen(); }} title={t("Más acciones", "More actions")} aria-label={`${t("Acciones de", "Actions for")} ${conversation.title}`} aria-expanded={open}><MoreHorizontal size={15} /></button>
     {open && createPortal(<div ref={menu} className="conversation-menu conversation-menu--portal" style={menuStyle} role="menu" onClick={(event) => event.stopPropagation()} onKeyDown={(event) => {
       const buttons = [...event.currentTarget.querySelectorAll<HTMLButtonElement>("[role=menuitem]")];
       const index = buttons.indexOf(document.activeElement as HTMLButtonElement);
       if (event.key === "ArrowDown") { event.preventDefault(); buttons[(index + 1) % buttons.length]?.focus(); }
       if (event.key === "ArrowUp") { event.preventDefault(); buttons[(index - 1 + buttons.length) % buttons.length]?.focus(); }
     }}>
-      {!conversation.archived && <button role="menuitem" onClick={() => action("pin")}>{conversation.pinned ? <PinOff size={14} /> : <Pin size={14} />}{conversation.pinned ? "Desfijar" : "Fijar"}</button>}
-      <button role="menuitem" onClick={() => action("rename")}><Pencil size={14} />Renombrar</button>
-      <button role="menuitem" onClick={() => action(conversation.archived ? "restore" : "archive")}>{conversation.archived ? <RotateCcw size={14} /> : <Archive size={14} />}{conversation.archived ? "Restaurar" : "Archivar"}</button>
+      {!conversation.archived && <button role="menuitem" onClick={() => action("pin")}>{conversation.pinned ? <PinOff size={14} /> : <Pin size={14} />}{conversation.pinned ? t("Desfijar", "Unpin") : t("Fijar", "Pin")}</button>}
+      <button role="menuitem" onClick={() => action("rename")}><Pencil size={14} />{t("Renombrar", "Rename")}</button>
+      <button role="menuitem" onClick={() => action(conversation.archived ? "restore" : "archive")}>{conversation.archived ? <RotateCcw size={14} /> : <Archive size={14} />}{conversation.archived ? t("Restaurar", "Restore") : t("Archivar", "Archive")}</button>
       <hr />
-      <button role="menuitem" onClick={() => action("duplicate")}><Copy size={14} />Duplicar</button>
-      <button role="menuitem" onClick={() => action("markdown")}><FileText size={14} />Copiar Markdown</button>
-      <button role="menuitem" onClick={() => action("copy-id")}><Clipboard size={14} />Copiar identificador</button>
-      <button role="menuitem" onClick={() => action("clear")}><RotateCcw size={14} />Limpiar mensajes</button>
+      <button role="menuitem" onClick={() => action("duplicate")}><Copy size={14} />{t("Duplicar", "Duplicate")}</button>
+      <button role="menuitem" onClick={() => action("markdown")}><FileText size={14} />{t("Copiar Markdown", "Copy Markdown")}</button>
+      <button role="menuitem" onClick={() => action("copy-id")}><Clipboard size={14} />{t("Copiar identificador", "Copy identifier")}</button>
+      <button role="menuitem" onClick={() => action("clear")}><RotateCcw size={14} />{t("Limpiar mensajes", "Clear messages")}</button>
       <hr />
-      <button role="menuitem" className="is-danger" onClick={() => action("delete")}><Trash2 size={14} />Eliminar</button>
+      <button role="menuitem" className="is-danger" onClick={() => action("delete")}><Trash2 size={14} />{t("Eliminar", "Delete")}</button>
     </div>, document.body)}
   </div>;
 }

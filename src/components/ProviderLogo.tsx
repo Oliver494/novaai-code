@@ -5,6 +5,7 @@ import nvidiaLogo from "../assets/providers/nvidia.svg";
 import ollamaLogo from "../assets/providers/ollama.png";
 import openAiLogo from "../assets/providers/openai.svg";
 import zaiLogo from "../assets/providers/zai.svg";
+import kimiLogo from "../assets/providers/kimi.svg";
 import { Plug } from "lucide-react";
 import type { ProviderId } from "../types";
 
@@ -18,6 +19,7 @@ const logos: Partial<Record<ProviderId, string>> = {
   gemini: geminiLogo,
   nvidia: nvidiaLogo,
   zai: zaiLogo,
+  kimi: kimiLogo,
 };
 
 const names: Record<ProviderId, string> = {
@@ -28,6 +30,7 @@ const names: Record<ProviderId, string> = {
   gemini: "Google Gemini",
   nvidia: "NVIDIA",
   zai: "Z.AI",
+  kimi: "Kimi",
   custom: "Personalizado",
 };
 

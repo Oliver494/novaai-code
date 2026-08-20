@@ -25,7 +25,7 @@ export type Notice = {
   message: string;
 };
 
-export type ProviderId = "ollama" | "lm_studio" | "open_ai" | "anthropic" | "gemini" | "nvidia" | "zai" | "custom";
+export type ProviderId = "ollama" | "lm_studio" | "open_ai" | "anthropic" | "gemini" | "nvidia" | "zai" | "kimi" | "custom";
 export type ReasoningEffort = "low" | "medium" | "high";
 
 export type ProviderConfig = {
@@ -103,7 +103,13 @@ export type ChatMessage = {
   reasoning?: string;
   createdAt: number;
   uploads?: Omit<ChatUpload, "data">[];
+  contextReferences?: ContextReference[];
+  appliedChanges?: AppliedChange[];
 };
+
+export type ContextReference = { path: string; startLine: number; endLine: number; truncated: boolean };
+export type AppliedChange = { type: "write" | "mkdir" | "rename" | "delete"; path: string; newPath?: string; before?: string; after?: string; truncated?: boolean };
+export type ExternalFolderGrant = { id: string; path: string; name: string; access: "read" | "write" };
 
 export type Conversation = {
   id: string;
@@ -115,7 +121,9 @@ export type Conversation = {
   archived: boolean;
   archivedAt: number | null;
   lastError?: boolean;
+  assistantMode: "chat" | "code";
   approvalMode: "ask" | "auto" | "full";
+  externalFolders: ExternalFolderGrant[];
   agentTask?: AgentTask;
   compactedContext?: string;
   compactedAt?: number;
@@ -123,6 +131,8 @@ export type Conversation = {
   createdAt: number;
   updatedAt: number;
 };
+
+export type AssistantWorkspace = "chat" | "code";
 
 export type AgentState = "idle" | "analyzing" | "planning" | "awaiting_approval" | "executing" | "testing" | "correcting" | "completed" | "cancelled" | "failed" | "interrupted";
 export type AgentStep = { id: string; label: string; status: "pending" | "in_progress" | "completed" | "failed"; detail?: string };
@@ -142,6 +152,14 @@ export type AiProjectAction = {
   path: string;
   content?: string;
   newPath?: string;
+  rootId?: string;
+};
+
+export type RecoverySnapshotInfo = {
+  id: string;
+  createdAt: number;
+  actionCount: number;
+  summary: string[];
 };
 
 export type AiChatEvent =

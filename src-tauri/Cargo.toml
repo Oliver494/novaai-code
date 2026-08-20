@@ -4,6 +4,8 @@ version = "0.1.0"
 description = "A local-first AI coding assistant"
 authors = ["NovaAI Code contributors"]
 edition = "2021"
+license = "Apache-2.0"
+repository = "https://github.com/Oliver494/novaai-code"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
@@ -35,6 +37,7 @@ hex = "0.4"
 base64 = "0.22"
 keyring = { version = "4", features = ["v1"] }
 semver = "1"
+sysinfo = "0.39.6"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "time", "net", "io-util"] }

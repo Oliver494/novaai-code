@@ -1,5 +1,6 @@
 import { AlertTriangle, FilePlus2, FolderPlus, Pencil, X } from "lucide-react";
 import { FormEvent, useEffect, useRef, useState } from "react";
+import { usePreferences } from "../services/preferences";
 
 export type DialogRequest = {
   kind: "new-file" | "new-folder" | "rename" | "delete";
@@ -17,13 +18,14 @@ type Props = {
 };
 
 const details = {
-  "new-file": { title: "Crear archivo", label: "Nombre del archivo", action: "Crear archivo", Icon: FilePlus2 },
-  "new-folder": { title: "Crear carpeta", label: "Nombre de la carpeta", action: "Crear carpeta", Icon: FolderPlus },
-  rename: { title: "Renombrar", label: "Nuevo nombre", action: "Renombrar", Icon: Pencil },
-  delete: { title: "Eliminar", label: "", action: "Eliminar", Icon: AlertTriangle },
+  "new-file": { title: ["Crear archivo", "Create file"], label: ["Nombre del archivo", "File name"], action: ["Crear archivo", "Create file"], Icon: FilePlus2 },
+  "new-folder": { title: ["Crear carpeta", "Create folder"], label: ["Nombre de la carpeta", "Folder name"], action: ["Crear carpeta", "Create folder"], Icon: FolderPlus },
+  rename: { title: ["Renombrar", "Rename"], label: ["Nuevo nombre", "New name"], action: ["Renombrar", "Rename"], Icon: Pencil },
+  delete: { title: ["Eliminar", "Delete"], label: ["", ""], action: ["Eliminar", "Delete"], Icon: AlertTriangle },
 };
 
 export function ActionDialog({ request, busy, error, onCancel, onConfirm }: Props) {
+  const { t } = usePreferences();
   const [value, setValue] = useState(request.kind === "rename" ? request.targetName ?? "" : "");
   const inputRef = useRef<HTMLInputElement>(null);
   const config = details[request.kind];
@@ -43,19 +45,19 @@ export function ActionDialog({ request, busy, error, onCancel, onConfirm }: Prop
       <form className={`dialog-card ${request.kind === "delete" ? "dialog-card--danger" : ""}`} onSubmit={submit} role="dialog" aria-modal="true" aria-labelledby="dialog-title">
         <div className="dialog-card__heading">
           <span className="dialog-card__icon"><config.Icon size={18} /></span>
-          <div><h2 id="dialog-title">{config.title}</h2><p title={request.targetPath}>{request.targetPath || "Raíz del proyecto"}</p></div>
-          <button className="icon-button" type="button" onClick={onCancel} disabled={busy} title="Cerrar" aria-label="Cerrar"><X size={16} strokeWidth={1.8} /></button>
+          <div><h2 id="dialog-title">{t(config.title[0], config.title[1])}</h2><p title={request.targetPath}>{request.targetPath || t("Raíz del proyecto", "Project root")}</p></div>
+          <button className="icon-button" type="button" onClick={onCancel} disabled={busy} title={t("Cerrar", "Close")} aria-label={t("Cerrar", "Close")}><X size={16} strokeWidth={1.8} /></button>
         </div>
         {request.kind === "delete" ? (
-          <p className="dialog-warning">Se eliminará <strong>{request.targetName}</strong>{request.isDirectory ? " y todo su contenido" : ""}. Esta acción no se puede deshacer.</p>
+          <p className="dialog-warning">{t("Se eliminará", "This will delete")} <strong>{request.targetName}</strong>{request.isDirectory ? t(" y todo su contenido", " and all its contents") : ""}. {t("Esta acción no se puede deshacer.", "This action cannot be undone.")}</p>
         ) : (
-          <label className="dialog-field">{config.label}<input ref={inputRef} value={value} onChange={(event) => setValue(event.target.value)} disabled={busy} /></label>
+          <label className="dialog-field">{t(config.label[0], config.label[1])}<input ref={inputRef} value={value} onChange={(event) => setValue(event.target.value)} disabled={busy} /></label>
         )}
         {error && <p className="dialog-error" role="alert">{error}</p>}
         <div className="dialog-actions">
-          <button className="secondary-button" type="button" onClick={onCancel} disabled={busy}>Cancelar</button>
+          <button className="secondary-button" type="button" onClick={onCancel} disabled={busy}>{t("Cancelar", "Cancel")}</button>
           <button className={request.kind === "delete" ? "danger-button" : "primary-button"} type="submit" disabled={busy || (request.kind !== "delete" && !value.trim())}>
-            {busy ? "Procesando…" : config.action}
+            {busy ? t("Procesando…", "Processing…") : t(config.action[0], config.action[1])}
           </button>
         </div>
       </form>

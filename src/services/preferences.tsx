@@ -55,6 +55,7 @@ function loadPreferences(): { theme: ThemePreference; language: LanguagePreferen
 export function PreferencesProvider({ children }: { children: ReactNode }) {
   const [preferences, setPreferences] = useState(loadPreferences);
   const [systemDark, setSystemDark] = useState(() => matchMedia("(prefers-color-scheme: dark)").matches);
+  const [generatedCatalog, setGeneratedCatalog] = useState<Record<string, string>>({});
   const resolvedLanguage = preferences.language === "auto" ? systemLanguage() : preferences.language;
   const resolvedTheme = preferences.theme === "system" ? (systemDark ? "dark" : "light") : preferences.theme;
 
@@ -73,13 +74,22 @@ export function PreferencesProvider({ children }: { children: ReactNode }) {
     document.documentElement.style.colorScheme = resolvedTheme;
   }, [preferences, resolvedLanguage, resolvedTheme]);
 
+  useEffect(() => {
+    let active = true;
+    if (["es", "en"].includes(resolvedLanguage)) { setGeneratedCatalog({}); return; }
+    void import("../locales/generated").then(({ generatedTranslations }) => {
+      if (active) setGeneratedCatalog(generatedTranslations[resolvedLanguage] ?? {});
+    });
+    return () => { active = false; };
+  }, [resolvedLanguage]);
+
   const value = useMemo<Preferences>(() => ({
     ...preferences,
     resolvedLanguage,
     setTheme: (theme) => setPreferences((current) => ({ ...current, theme })),
     setLanguage: (language) => setPreferences((current) => ({ ...current, language })),
-    t: (spanish, english) => resolvedLanguage === "es" ? spanish : translations[resolvedLanguage]?.[english] ?? english,
-  }), [preferences, resolvedLanguage]);
+    t: (spanish, english) => resolvedLanguage === "es" ? spanish : resolvedLanguage === "en" ? english : translations[resolvedLanguage]?.[english] ?? generatedCatalog[english] ?? english,
+  }), [preferences, resolvedLanguage, generatedCatalog]);
 
   return <PreferencesContext.Provider value={value}>{children}</PreferencesContext.Provider>;
 }
